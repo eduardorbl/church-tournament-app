@@ -28,7 +28,12 @@ import FIFATournament from "./pages/admin/FIFATournament";
 import PebolimTournament from "./pages/admin/PebolimTournament";
 
 export default function App() {
-  const { session, isAdmin, ready, signOut } = useAuth();
+  const { session, isAdmin, ready, signOut, needsPasswordSetup } = useAuth();
+
+  // Se o usuário precisa definir senha, sempre mostra essa tela
+  if (needsPasswordSetup) {
+    return <SetPassword />;
+  }
 
   return (
     <div className="min-h-screen flex flex-col">
@@ -88,6 +93,9 @@ export default function App() {
           {/* MatchPage - aceitar ambos padrões */}
           <Route path="/match/:id" element={<MatchPage />} />
           <Route path="/partida/:id" element={<MatchPage />} />
+
+          {/* Rota para definir senha */}
+          <Route path="/set-password" element={<SetPassword />} />
 
           {/* Rotas admin protegidas */}
           <Route

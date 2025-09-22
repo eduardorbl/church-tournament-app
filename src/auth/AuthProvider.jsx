@@ -20,7 +20,9 @@ export function AuthProvider({ children }) {
         await refreshRole(sess.user.id);
         
         // Verifica se é um usuário que veio via invite/link mágico
-        if (!sess.user.user_metadata?.password_set) {
+        // Usuários criados via invite não têm password_set ou é false
+        const passwordSet = sess.user.user_metadata?.password_set;
+        if (passwordSet === undefined || passwordSet === false) {
           setNeedsPasswordSetup(true);
         }
       } else {
@@ -36,8 +38,11 @@ export function AuthProvider({ children }) {
           await refreshRole(newSession.user.id);
           
           // Verifica eventos específicos que indicam primeiro login
-          if (event === 'SIGNED_IN' && !newSession.user.user_metadata?.password_set) {
-            setNeedsPasswordSetup(true);
+          if (event === 'SIGNED_IN') {
+            const passwordSet = newSession.user.user_metadata?.password_set;
+            if (passwordSet === undefined || passwordSet === false) {
+              setNeedsPasswordSetup(true);
+            }
           }
         } else {
           setIsAdmin(false);
