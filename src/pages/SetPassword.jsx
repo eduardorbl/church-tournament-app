@@ -20,32 +20,26 @@ export default function SetPassword() {
     e.preventDefault();
     console.log('🔥 FORM SUBMITTED - START');
     
-    if (submitting) {
-      console.log('Already submitting, returning');
-      return;
-    }
+    if (submitting) return;
     
     setSubmitting(true);
     setErr(null);
     setMsg(null);
-    console.log('✅ Set submitting to true');
     
     if (!pwd || pwd.length < 8) {
-      console.log('❌ Password too short');
       setErr("A senha deve ter pelo menos 8 caracteres.");
       setSubmitting(false);
       return;
     }
     if (pwd !== pwd2) {
-      console.log('❌ Passwords do not match');
       setErr("As senhas não coincidem.");
       setSubmitting(false);
       return;
     }
 
-    console.log('🚀 Starting password update...');
-    
     try {
+      console.log('🚀 Starting password update...');
+      
       // 1. Atualizar a senha
       const { error: passwordError } = await supabase.auth.updateUser({ 
         password: pwd,
@@ -61,28 +55,60 @@ export default function SetPassword() {
 
       console.log('✅ Password updated successfully');
 
-      // 2. Garantir que o usuário seja admin na tabela profiles
-      console.log('🔧 Ensuring admin profile...');
-      const { error: profileError } = await supabase
-        .from('profiles')
-        .upsert({
-          user_id: user.id,
-          name: user.email.split('@')[0], // nome baseado no email
-          role: 'admin'
-        });
-
-      if (profileError) {
-        console.warn('Profile creation warning:', profileError);
-        // Não falha aqui, pode ser que já existe
-      }
-
-      console.log('✅ Admin profile ensured');
+      // 2. Verificar se o profile admin foi criado automaticamente
+      console.log('🔍 Checking if admin profile exists...');
       
-      setMsg("Senha definida com sucesso!");
+      let profileExists = false;
+      let attempts = 0;
+      const maxAttempts = 5;
+      
+      // Tentar várias vezes com delay (aguardar trigger executar)
+      while (!profileExists && attempts < maxAttempts) {
+        attempts++;
+        console.log(`Attempt ${attempts}/${maxAttempts} to check profile...`);
+        
+        const { data: profile, error: profileCheckError } = await supabase
+          .from('profiles')
+          .select('role')
+          .eq('user_id', user.id)
+          .single();
+        
+        if (!profileCheckError && profile?.role === 'admin') {
+          profileExists = true;
+          console.log('✅ Admin profile found!');
+        } else {
+          console.log('⏳ Profile not found yet, waiting...');
+          await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1s
+        }
+      }
+      
+      // Se após 5 tentativas ainda não existir, criar manualmente
+      if (!profileExists) {
+        console.log('🔧 Creating profile manually as fallback...');
+        const { error: manualProfileError } = await supabase
+          .from('profiles')
+          .insert({
+            user_id: user.id,
+            name: user.email.split('@')[0],
+            role: 'admin'
+          });
+        
+        if (manualProfileError && !manualProfileError.message.includes('duplicate key')) {
+          console.error('Manual profile creation error:', manualProfileError);
+          setErr('Erro ao criar perfil de administrador.');
+          setSubmitting(false);
+          return;
+        }
+      }
+      
+      // 3. Teste final da função is_admin
+      const { data: isAdminResult, error: adminCheckError } = await supabase.rpc('is_admin');
+      console.log('🔍 Final admin check:', isAdminResult, adminCheckError);
+      
+      setMsg("Senha definida e perfil configurado com sucesso!");
       setNeedsPasswordSetup(false);
       
-      // 3. Aguardar um pouco para a sessão se atualizar
-      console.log('⏳ Waiting for session to update...');
+      // 4. Redirecionar
       setTimeout(() => {
         console.log('🎯 Navigating to admin');
         setSubmitting(false);
@@ -96,13 +122,6 @@ export default function SetPassword() {
     }
   };
 
-  const handleButtonClick = () => {
-    console.log('🖱️ BUTTON CLICKED DIRECTLY');
-    setSubmitting(!submitting);
-  };
-
-  console.log('🔄 Rendering SetPassword - submitting:', submitting);
-
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
       <div className="max-w-md w-full mx-auto bg-white p-6 rounded-lg shadow-md">
@@ -111,9 +130,6 @@ export default function SetPassword() {
           <p className="text-gray-600 mt-2">Defina sua senha para continuar</p>
           <p className="text-xs text-gray-400 mt-2">
             User ID: {user?.id?.slice(0, 8)}... | Email: {user?.email}
-          </p>
-          <p className="text-xs text-red-500">
-            Submitting: {submitting ? 'TRUE' : 'FALSE'}
           </p>
         </div>
         
@@ -130,10 +146,7 @@ export default function SetPassword() {
               placeholder="Mínimo 8 caracteres"
               className="w-full p-3 border border-gray-300 rounded-md"
               value={pwd}
-              onChange={(e) => {
-                console.log('Password changed:', e.target.value.length, 'chars');
-                setPwd(e.target.value);
-              }}
+              onChange={(e) => setPwd(e.target.value)}
               required
               disabled={submitting}
             />
@@ -148,10 +161,7 @@ export default function SetPassword() {
               placeholder="Digite a senha novamente"
               className="w-full p-3 border border-gray-300 rounded-md"
               value={pwd2}
-              onChange={(e) => {
-                console.log('Password2 changed:', e.target.value.length, 'chars');
-                setPwd2(e.target.value);
-              }}
+              onChange={(e) => setPwd2(e.target.value)}
               required
               disabled={submitting}
             />
@@ -162,20 +172,9 @@ export default function SetPassword() {
             disabled={submitting}
             className="w-full bg-blue-600 text-white py-3 rounded-md font-medium hover:bg-blue-700 disabled:opacity-50"
           >
-            {submitting ? "Salvando…" : "Definir senha"}
+            {submitting ? "Configurando perfil..." : "Definir senha"}
           </button>
         </form>
-
-        {/* Debug buttons */}
-        <div className="mt-4 space-y-2">
-          <button
-            type="button"
-            onClick={handleButtonClick}
-            className="w-full text-xs bg-gray-200 py-2 rounded"
-          >
-            [Debug] Toggle submitting
-          </button>
-        </div>
       </div>
     </div>
   );
