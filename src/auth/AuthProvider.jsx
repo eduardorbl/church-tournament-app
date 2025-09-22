@@ -20,9 +20,9 @@ export function AuthProvider({ children }) {
         await refreshRole(sess.user.id);
         
         // Verifica se é um usuário que veio via invite/link mágico
-        // Usuários criados via invite não têm password_set ou é false
         const passwordSet = sess.user.user_metadata?.password_set;
         if (passwordSet === undefined || passwordSet === false) {
+          console.log('User needs password setup');
           setNeedsPasswordSetup(true);
         }
       } else {
@@ -32,15 +32,20 @@ export function AuthProvider({ children }) {
       setReady(true);
 
       sub = supabase.auth.onAuthStateChange(async (event, newSession) => {
+        console.log('Auth state changed:', event, newSession?.user?.email);
         setSession(newSession ?? null);
         
         if (newSession?.user?.id) {
-          await refreshRole(newSession.user.id);
+          // Só verificar admin se não está em setup de senha
+          if (!needsPasswordSetup) {
+            await refreshRole(newSession.user.id);
+          }
           
-          // Verifica eventos específicos que indicam primeiro login
+          // Verifica se precisa setup apenas no SIGNED_IN
           if (event === 'SIGNED_IN') {
             const passwordSet = newSession.user.user_metadata?.password_set;
             if (passwordSet === undefined || passwordSet === false) {
+              console.log('Setting needsPasswordSetup to true');
               setNeedsPasswordSetup(true);
             }
           }
@@ -50,20 +55,29 @@ export function AuthProvider({ children }) {
         
         if (event === 'SIGNED_OUT') {
           setNeedsPasswordSetup(false);
+          setIsAdmin(false);
         }
       }).data.subscription;
     };
 
     bootstrap();
     return () => sub?.unsubscribe();
-  }, []);
+  }, [needsPasswordSetup]);
 
-  const refreshRole = async () => {
-    const { data, error } = await supabase.rpc('is_admin');
-    if (error) {
-      console.error('is_admin RPC error', error);
+  const refreshRole = async (userId) => {
+    try {
+      const { data, error } = await supabase.rpc('is_admin');
+      if (error) {
+        console.error('is_admin RPC error', error);
+        setIsAdmin(false);
+      } else {
+        console.log('Admin check result:', data);
+        setIsAdmin(!!data);
+      }
+    } catch (err) {
+      console.error('Admin check failed:', err);
+      setIsAdmin(false);
     }
-    setIsAdmin(!error && !!data);
   };
 
   const signOut = async () => {

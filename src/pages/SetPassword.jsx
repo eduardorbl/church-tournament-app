@@ -16,10 +16,9 @@ export default function SetPassword() {
     console.log('SetPassword mounted, user:', user);
   }, [user]);
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     console.log('🔥 FORM SUBMITTED - START');
-    console.log('pwd:', pwd, 'pwd2:', pwd2, 'submitting:', submitting);
     
     if (submitting) {
       console.log('Already submitting, returning');
@@ -27,6 +26,8 @@ export default function SetPassword() {
     }
     
     setSubmitting(true);
+    setErr(null);
+    setMsg(null);
     console.log('✅ Set submitting to true');
     
     if (!pwd || pwd.length < 8) {
@@ -42,20 +43,57 @@ export default function SetPassword() {
       return;
     }
 
-    console.log('🚀 Starting API call...');
+    console.log('🚀 Starting password update...');
     
-    // Versão ultra simples para testar
-    setTimeout(() => {
-      console.log('⏰ Timeout finished - simulating success');
-      setMsg("Senha simulada com sucesso!");
-      setNeedsPasswordSetup(false);
-      setSubmitting(false);
+    try {
+      // 1. Atualizar a senha
+      const { error: passwordError } = await supabase.auth.updateUser({ 
+        password: pwd,
+        data: { password_set: true }
+      });
+
+      if (passwordError) {
+        console.error('Password update error:', passwordError);
+        setErr(`Erro ao atualizar senha: ${passwordError.message}`);
+        setSubmitting(false);
+        return;
+      }
+
+      console.log('✅ Password updated successfully');
+
+      // 2. Garantir que o usuário seja admin na tabela profiles
+      console.log('🔧 Ensuring admin profile...');
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .upsert({
+          user_id: user.id,
+          name: user.email.split('@')[0], // nome baseado no email
+          role: 'admin'
+        });
+
+      if (profileError) {
+        console.warn('Profile creation warning:', profileError);
+        // Não falha aqui, pode ser que já existe
+      }
+
+      console.log('✅ Admin profile ensured');
       
+      setMsg("Senha definida com sucesso!");
+      setNeedsPasswordSetup(false);
+      
+      // 3. Aguardar um pouco para a sessão se atualizar
+      console.log('⏳ Waiting for session to update...');
       setTimeout(() => {
         console.log('🎯 Navigating to admin');
+        setSubmitting(false);
         nav('/admin', { replace: true });
-      }, 1000);
-    }, 2000);
+      }, 1500);
+      
+    } catch (error) {
+      console.error('Unexpected error:', error);
+      setErr(`Erro inesperado: ${error.message}`);
+      setSubmitting(false);
+    }
   };
 
   const handleButtonClick = () => {
@@ -93,10 +131,11 @@ export default function SetPassword() {
               className="w-full p-3 border border-gray-300 rounded-md"
               value={pwd}
               onChange={(e) => {
-                console.log('Password changed:', e.target.value);
+                console.log('Password changed:', e.target.value.length, 'chars');
                 setPwd(e.target.value);
               }}
               required
+              disabled={submitting}
             />
           </div>
           
@@ -110,10 +149,11 @@ export default function SetPassword() {
               className="w-full p-3 border border-gray-300 rounded-md"
               value={pwd2}
               onChange={(e) => {
-                console.log('Password2 changed:', e.target.value);
+                console.log('Password2 changed:', e.target.value.length, 'chars');
                 setPwd2(e.target.value);
               }}
               required
+              disabled={submitting}
             />
           </div>
           
@@ -121,7 +161,6 @@ export default function SetPassword() {
             type="submit"
             disabled={submitting}
             className="w-full bg-blue-600 text-white py-3 rounded-md font-medium hover:bg-blue-700 disabled:opacity-50"
-            onClick={() => console.log('🖱️ Submit button clicked')}
           >
             {submitting ? "Salvando…" : "Definir senha"}
           </button>
@@ -135,21 +174,6 @@ export default function SetPassword() {
             className="w-full text-xs bg-gray-200 py-2 rounded"
           >
             [Debug] Toggle submitting
-          </button>
-          
-          <button
-            type="button"
-            onClick={() => {
-              console.log('🧪 Direct form submit test');
-              const form = document.querySelector('form');
-              if (form) {
-                console.log('Form found, dispatching submit event');
-                form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-              }
-            }}
-            className="w-full text-xs bg-yellow-200 py-2 rounded"
-          >
-            [Debug] Force form submit
           </button>
         </div>
       </div>
