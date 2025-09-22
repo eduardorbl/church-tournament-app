@@ -311,14 +311,109 @@ export default function Matches() {
         return false;
       }
 
+      console.log('🔄 === INÍCIO MUTAÇÃO ===');
+      console.log('🔍 Match ID:', id, '(tipo:', typeof id, ')');
+      console.log('🔍 Patch original:', JSON.stringify(patch, null, 2));
+
+      // Validar que o ID é UUID válido
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      if (!uuidRegex.test(id)) {
+        console.error('❌ ID inválido:', id);
+        setLastError('ID da partida inválido.');
+        return false;
+      }
+
+      // Criar patch limpo e validado
+      const cleanPatch = {};
+      
+      // Processar cada campo individualmente
+      for (const [key, value] of Object.entries(patch)) {
+        console.log(`🔍 Processando ${key}:`, value, `(${typeof value})`);
+        
+        if (key === 'home_score' || key === 'away_score') {
+          // Scores devem ser integers
+          if (value === null || value === undefined) {
+            cleanPatch[key] = 0; // Default para 0 se null/undefined
+          } else {
+            const numValue = parseInt(value, 10);
+            if (isNaN(numValue) || numValue < 0) {
+              console.error(`❌ ${key} inválido:`, value);
+              setLastError(`${key} deve ser um número positivo.`);
+              return false;
+            }
+            cleanPatch[key] = numValue;
+          }
+          console.log(`✅ ${key} → ${cleanPatch[key]}`);
+        }
+        else if (key === 'status') {
+          // Status deve ser enum válido
+          const validStatuses = ['scheduled', 'ongoing', 'paused', 'finished'];
+          if (!validStatuses.includes(value)) {
+            console.error(`❌ Status inválido:`, value);
+            setLastError(`Status deve ser: ${validStatuses.join(', ')}`);
+            return false;
+          }
+          cleanPatch[key] = value;
+          console.log(`✅ status → ${cleanPatch[key]}`);
+        }
+        else if (key === 'starts_at') {
+          // Data deve ser ISO string válida ou null
+          if (value === null || value === undefined) {
+            cleanPatch[key] = null;
+          } else {
+            try {
+              new Date(value).toISOString();
+              cleanPatch[key] = value;
+            } catch (e) {
+              console.error(`❌ starts_at inválido:`, value);
+              setLastError('starts_at deve ser uma data válida.');
+              return false;
+            }
+          }
+          console.log(`✅ starts_at → ${cleanPatch[key]}`);
+        }
+        else if (key === 'meta') {
+          // Meta deve ser objeto ou null
+          if (value === null || value === undefined) {
+            cleanPatch[key] = {};
+          } else if (typeof value === 'object' && !Array.isArray(value)) {
+            cleanPatch[key] = value;
+          } else {
+            console.error(`❌ meta inválido:`, value);
+            setLastError('meta deve ser um objeto.');
+            return false;
+          }
+          console.log(`✅ meta → ${JSON.stringify(cleanPatch[key])}`);
+        }
+        else {
+          // Outros campos passam direto mas com warning
+          console.warn(`⚠️ Campo ${key} não validado explicitamente:`, value);
+          cleanPatch[key] = value;
+        }
+      }
+
+      console.log('🔄 Patch final:', JSON.stringify(cleanPatch, null, 2));
+      console.log('🔄 Executando UPDATE...');
+
       const { data, error } = await supabase
         .from("matches")
-        .update(patch)
+        .update(cleanPatch)
         .eq("id", id)
-        .select("id"); // detecta RLS (se não puder selecionar, volta [])
+        .select("id");
 
       if (error) {
-        console.error("Update matches error:", error, { id, patch });
+        console.error("❌ === ERRO SUPABASE ===");
+        console.error("Error object:", error);
+        console.error("Match ID:", id);
+        console.error("Clean patch:", cleanPatch);
+        console.error("Original patch:", patch);
+        console.error("Error details:", {
+          code: error.code,
+          message: error.message,
+          details: error.details,
+          hint: error.hint
+        });
+        
         const msg = [
           "Falha ao atualizar a partida.",
           error.code && `code: ${error.code}`,
@@ -333,42 +428,26 @@ export default function Matches() {
       }
       
       if (!data || data.length === 0) {
-        const msg =
-          "Nenhuma linha atualizada. Verifique permissões (GRANT/RLS) e se o usuário é admin.";
-        console.warn(msg, { id, patch });
+        const msg = "Nenhuma linha atualizada. Verifique permissões (GRANT/RLS) e se o usuário é admin.";
+        console.warn(msg, { id, patch: cleanPatch });
         setLastError(msg);
         return false;
       }
 
+      console.log('✅ Sucesso! Data:', data);
+      console.log('🔄 === FIM MUTAÇÃO ===');
       if (after) await after();
       return true;
     } catch (e) {
-      console.error("mutate exception:", e);
+      console.error("❌ === EXCEPTION ===");
+      console.error("Exception:", e);
+      console.error("Stack:", e.stack);
       setLastError(e.message || "Erro ao atualizar");
       return false;
     } finally {
       setMatchBusy(id, false);
       setTimeout(() => loadMatches(), 50);
     }
-  };
-
-  /** ========= Troca de status com proteção de filtro ========= */
-  const applyStatusChange = async (m, nextStatus, after = null) => {
-    const prevStatus = m.status;
-
-    const patch =
-      prevStatus === "scheduled" && nextStatus === "ongoing"
-        ? { status: nextStatus, starts_at: new Date().toISOString() }
-        : { status: nextStatus };
-
-    const ok = await mutate(m.id, patch, after);
-
-    // Evita "sumir da lista" por causa do filtro de status
-    if (ok && selectedStatus === prevStatus) {
-      setSelectedStatus(null);
-    }
-
-    return ok;
   };
 
   /** ========= Placar ========= */
@@ -405,6 +484,19 @@ export default function Matches() {
   };
 
   /** ========= Status ========= */
+  const applyStatusChange = async (m, newStatus) => {
+    const patch = { status: newStatus };
+    
+    // Se está mudando para 'ongoing', definir starts_at como agora
+    if (newStatus === "ongoing" && m.status === "scheduled") {
+      patch.starts_at = new Date().toISOString();
+    }
+    
+    console.log(`🔄 Mudando status de ${m.status} para ${newStatus}`, { matchId: m.id, patch });
+    
+    return await mutate(m.id, patch);
+  };
+
   const startMatch = async (m) => {
     await applyStatusChange(m, "ongoing");
   };
