@@ -295,6 +295,7 @@ export default function Matches() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSport, selectedStatus]);
 
+
   /** ========= Mutação genérica ========= */
   const mutate = async (id, patch, after = null) => {
     setMatchBusy(id, true);
@@ -313,6 +314,7 @@ export default function Matches() {
       console.log('🔄 === INÍCIO MUTAÇÃO ===');
       console.log('🔍 Match ID:', id, '(tipo:', typeof id, ')');
       console.log('🔍 Patch original:', JSON.stringify(patch, null, 2));
+      console.log('🔍 Patch keys/values:', Object.entries(patch).map(([k, v]) => `${k}: ${v} (${typeof v})`));
 
       // Validar que o ID é UUID válido
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -320,6 +322,15 @@ export default function Matches() {
         console.error('❌ ID inválido:', id);
         setLastError('ID da partida inválido.');
         return false;
+      }
+
+      // VERIFICAÇÃO EXTRA: garantir que não há UUIDs nos valores
+      for (const [key, value] of Object.entries(patch)) {
+        if (typeof value === 'string' && uuidRegex.test(value)) {
+          console.error('❌ PROBLEMA DETECTADO: UUID encontrado em valor:', key, '=', value);
+          setLastError(`Erro: Campo ${key} contém UUID inválido: ${value}`);
+          return false;
+        }
       }
 
       // Criar patch limpo e validado
@@ -337,6 +348,12 @@ export default function Matches() {
             // Converter explicitamente para number primeiro
             let numValue;
             if (typeof value === 'string') {
+              // VERIFICAÇÃO ADICIONAL: se string contém UUID
+              if (uuidRegex.test(value)) {
+                console.error(`❌ ERRO CRÍTICO: ${key} contém UUID:`, value);
+                setLastError(`Erro crítico: ${key} contém UUID em vez de número: ${value}`);
+                return false;
+              }
               // Se for string, tentar converter
               numValue = parseInt(value, 10);
             } else if (typeof value === 'number') {
@@ -475,21 +492,28 @@ export default function Matches() {
     // Não permite alterar placar de jogos agendados (ainda não iniciados)
     if (m.status === "scheduled") return;
     
+    console.log('🔍 === DEBUG changePoints ===');
+    console.log('🔍 Match object:', m);
+    console.log('🔍 Match ID:', m.id, '(tipo:', typeof m.id, ')');
+    console.log('🔍 Team:', team, '(tipo:', typeof team, ')');
+    console.log('🔍 Action:', action);
+    
     const key = `${team}_score`;
+    console.log('🔍 Key calculada:', key);
+    console.log('🔍 Valor atual m[key]:', m[key], '(tipo:', typeof m[key], ')');
+    
     let next = Math.max(0, Number(m[key] || 0));
     if (action === "inc") next += 1;
     if (action === "dec") next = Math.max(0, next - 1);
     if (action === "reset") next = 0;
     
-    console.log(`🔄 changePoints: ${team} ${action}`, {
-      matchId: m.id,
-      key,
-      currentValue: m[key],
-      nextValue: next,
-      patch: { [key]: next }
-    });
+    console.log('🔍 Valor calculado next:', next, '(tipo:', typeof next, ')');
     
-    await mutate(m.id, { [key]: next });
+    const patch = { [key]: next };
+    console.log('🔍 Patch que será enviado:', JSON.stringify(patch, null, 2));
+    console.log('🔍 === FIM DEBUG changePoints ===');
+    
+    await mutate(m.id, patch);
   };
 
   /** ========= Sets (Vôlei) ========= */
