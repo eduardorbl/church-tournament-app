@@ -22,40 +22,52 @@ export default function SetPassword() {
   async function handleSubmit(e) {
     e.preventDefault();
     if (submitting) return;
-    setMsg(null); setErr(null);
+    
+    setMsg(null); 
+    setErr(null);
+    setSubmitting(true);
 
     if (!pwd || pwd.length < 8) {
       setErr("A senha deve ter pelo menos 8 caracteres.");
+      setSubmitting(false);
       return;
     }
     if (pwd !== pwd2) {
       setErr("As senhas não coincidem.");
+      setSubmitting(false);
       return;
     }
 
-    setSubmitting(true);
-    
-    // Atualiza a senha e marca que foi configurada
-    const { error } = await supabase.auth.updateUser({ 
-      password: pwd,
-      data: { password_set: true }
-    });
-    
-    setSubmitting(false);
+    try {
+      // Atualiza a senha e marca que foi configurada
+      const { error } = await supabase.auth.updateUser({ 
+        password: pwd,
+        data: { password_set: true }
+      });
 
-    if (error) {
-      setErr(error.message || "Não foi possível atualizar a senha.");
-      return;
+      if (error) {
+        setErr(error.message || "Não foi possível atualizar a senha.");
+        setSubmitting(false);
+        return;
+      }
+      
+      setMsg("Senha definida com sucesso!");
+      setNeedsPasswordSetup(false);
+      
+      // Verifica se é admin e redireciona
+      const { data: isAdmin } = await supabase.rpc('is_admin');
+      const redirectTo = isAdmin ? '/admin' : '/';
+      
+      setTimeout(() => {
+        setSubmitting(false);
+        nav(redirectTo, { replace: true });
+      }, 1000);
+      
+    } catch (error) {
+      console.error('Erro ao definir senha:', error);
+      setErr("Erro inesperado. Tente novamente.");
+      setSubmitting(false);
     }
-    
-    setMsg("Senha definida com sucesso!");
-    setNeedsPasswordSetup(false);
-    
-    // Verifica se é admin e redireciona
-    const { data: isAdmin } = await supabase.rpc('is_admin');
-    const redirectTo = isAdmin ? '/admin' : '/';
-    
-    setTimeout(() => nav(redirectTo, { replace: true }), 1000);
   }
 
   return (
@@ -82,6 +94,7 @@ export default function SetPassword() {
               onChange={(e) => setPwd(e.target.value)}
               autoComplete="new-password"
               required
+              disabled={submitting}
             />
           </div>
           
@@ -97,6 +110,7 @@ export default function SetPassword() {
               onChange={(e) => setPwd2(e.target.value)}
               autoComplete="new-password"
               required
+              disabled={submitting}
             />
           </div>
           
