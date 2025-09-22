@@ -311,86 +311,14 @@ export default function Matches() {
         return false;
       }
 
-      // 🔧 Log para debug - vamos ver o que está sendo enviado
-      console.log('🔄 Atualizando partida:', { id, patch });
-      console.log('🔍 Tipo do ID:', typeof id, 'Valor:', id);
-
-      // 🔧 Validação dos dados antes de enviar
-      const validatedPatch = { ...patch };
-      
-      // 🔍 Log detalhado de cada campo do patch
-      Object.keys(validatedPatch).forEach(key => {
-        console.log(`🔍 Campo ${key}:`, {
-          valor: validatedPatch[key],
-          tipo: typeof validatedPatch[key],
-          isArray: Array.isArray(validatedPatch[key])
-        });
-      });
-      
-      // Se estamos atualizando meta, garantir que é um objeto
-      if (validatedPatch.meta && typeof validatedPatch.meta !== 'object') {
-        console.error('Meta deve ser um objeto:', validatedPatch.meta);
-        setLastError('Erro interno: meta deve ser um objeto.');
-        return false;
-      }
-
-      // Garantir que scores são números ou null
-      if ('home_score' in validatedPatch) {
-        const originalValue = validatedPatch.home_score;
-        validatedPatch.home_score = validatedPatch.home_score === null ? null : Number(validatedPatch.home_score);
-        console.log(`🔍 home_score: ${originalValue} → ${validatedPatch.home_score} (${typeof validatedPatch.home_score})`);
-      }
-      if ('away_score' in validatedPatch) {
-        const originalValue = validatedPatch.away_score;
-        validatedPatch.away_score = validatedPatch.away_score === null ? null : Number(validatedPatch.away_score);
-        console.log(`🔍 away_score: ${originalValue} → ${validatedPatch.away_score} (${typeof validatedPatch.away_score})`);
-      }
-
-      // 🔧 Verificar se o ID da partida é válido
-      if (!id || typeof id !== 'string') {
-        console.error('ID da partida inválido:', id);
-        setLastError('ID da partida inválido.');
-        return false;
-      }
-
-      // 🔍 Verificar se é um UUID válido
-      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-      if (!uuidRegex.test(id)) {
-        console.error('ID não é um UUID válido:', id);
-        setLastError('ID da partida não é um UUID válido.');
-        return false;
-      }
-
-      // 🔍 Verificar se não há UUIDs em campos que devem ser integers
-      const integerFields = ['home_score', 'away_score', 'sport_id', 'home_team_id', 'away_team_id'];
-      for (const field of integerFields) {
-        if (field in validatedPatch && validatedPatch[field] !== null) {
-          const value = validatedPatch[field];
-          if (typeof value === 'string' && uuidRegex.test(value)) {
-            console.error(`❌ Campo ${field} contém UUID mas deveria ser integer:`, value);
-            setLastError(`Erro: Campo ${field} contém UUID inválido.`);
-            return false;
-          }
-        }
-      }
-
-      console.log('🔄 Patch validado final:', validatedPatch);
-
       const { data, error } = await supabase
         .from("matches")
-        .update(validatedPatch)
+        .update(patch)
         .eq("id", id)
         .select("id"); // detecta RLS (se não puder selecionar, volta [])
 
       if (error) {
-        console.error("Update matches error:", error, { id, patch: validatedPatch });
-        console.error("🔍 Error details:", {
-          code: error.code,
-          message: error.message,
-          details: error.details,
-          hint: error.hint
-        });
-        
+        console.error("Update matches error:", error, { id, patch });
         const msg = [
           "Falha ao atualizar a partida.",
           error.code && `code: ${error.code}`,
@@ -407,21 +335,15 @@ export default function Matches() {
       if (!data || data.length === 0) {
         const msg =
           "Nenhuma linha atualizada. Verifique permissões (GRANT/RLS) e se o usuário é admin.";
-        console.warn(msg, { id, patch: validatedPatch });
+        console.warn(msg, { id, patch });
         setLastError(msg);
         return false;
       }
 
-      console.log('✅ Partida atualizada com sucesso:', data);
       if (after) await after();
       return true;
     } catch (e) {
       console.error("mutate exception:", e);
-      console.error("🔍 Exception details:", {
-        name: e.name,
-        message: e.message,
-        stack: e.stack
-      });
       setLastError(e.message || "Erro ao atualizar");
       return false;
     } finally {
@@ -429,37 +351,49 @@ export default function Matches() {
       setTimeout(() => loadMatches(), 50);
     }
   };
-  
+
+  /** ========= Troca de status com proteção de filtro ========= */
+  const applyStatusChange = async (m, nextStatus, after = null) => {
+    const prevStatus = m.status;
+
+    const patch =
+      prevStatus === "scheduled" && nextStatus === "ongoing"
+        ? { status: nextStatus, starts_at: new Date().toISOString() }
+        : { status: nextStatus };
+
+    const ok = await mutate(m.id, patch, after);
+
+    // Evita "sumir da lista" por causa do filtro de status
+    if (ok && selectedStatus === prevStatus) {
+      setSelectedStatus(null);
+    }
+
+    return ok;
+  };
+
   /** ========= Placar ========= */
   const changePoints = async (m, team, action) => {
     // Não permite alterar placar de jogos agendados (ainda não iniciados)
     if (m.status === "scheduled") return;
-    
-    console.log('🔄 Alterando pontos:', { matchId: m.id, team, action, currentScore: m[`${team}_score`] });
     
     const key = `${team}_score`;
     let next = Math.max(0, Number(m[key] || 0));
     if (action === "inc") next += 1;
     if (action === "dec") next = Math.max(0, next - 1);
     if (action === "reset") next = 0;
-    
-    console.log('🔄 Novo valor do placar:', { key, next });
-    
     await mutate(m.id, { [key]: next });
   };
-  
+
   /** ========= Sets (Vôlei) ========= */
   const getSets = (m, side) => {
     const meta = m.meta || {};
     const key = side === "home" ? "home_sets" : "away_sets";
     return Math.max(0, Number(meta[key] || 0));
   };
-  
+
   const changeSets = async (m, team, action) => {
     // Não permite alterar sets de jogos agendados (ainda não iniciados)
     if (m.status === "scheduled") return;
-    
-    console.log('🔄 Alterando sets:', { matchId: m.id, team, action, currentMeta: m.meta });
     
     const meta = m.meta || {};
     const key = team === "home" ? "home_sets" : "away_sets";
@@ -467,11 +401,7 @@ export default function Matches() {
     if (action === "inc") value += 1;
     if (action === "dec") value = Math.max(0, value - 1);
     if (action === "reset") value = 0;
-    
-    const newMeta = { ...meta, [key]: value };
-    console.log('🔄 Nova meta:', newMeta);
-    
-    await mutate(m.id, { meta: newMeta });
+    await mutate(m.id, { meta: { ...meta, [key]: value } });
   };
 
   /** ========= Status ========= */
