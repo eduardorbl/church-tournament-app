@@ -296,7 +296,6 @@ export default function Matches() {
   }, [selectedSport, selectedStatus]);
 
   /** ========= Mutação genérica ========= */
-  // Sempre tentamos mutar; deixamos o servidor (RLS/GRANT) decidir.
   const mutate = async (id, patch, after = null) => {
     setMatchBusy(id, true);
     setLastError(null);
@@ -331,19 +330,31 @@ export default function Matches() {
         console.log(`🔍 Processando ${key}:`, value, `(${typeof value})`);
         
         if (key === 'home_score' || key === 'away_score') {
-          // Scores devem ser integers
+          // Scores devem ser integers - VALIDAÇÃO EXTRA
           if (value === null || value === undefined) {
-            cleanPatch[key] = 0; // Default para 0 se null/undefined
+            cleanPatch[key] = 0;
           } else {
-            const numValue = parseInt(value, 10);
+            // Converter explicitamente para number primeiro
+            let numValue;
+            if (typeof value === 'string') {
+              // Se for string, tentar converter
+              numValue = parseInt(value, 10);
+            } else if (typeof value === 'number') {
+              numValue = Math.floor(value); // Garantir que é integer
+            } else {
+              console.error(`❌ ${key} tipo inválido:`, typeof value, value);
+              setLastError(`${key} deve ser um número.`);
+              return false;
+            }
+            
             if (isNaN(numValue) || numValue < 0) {
-              console.error(`❌ ${key} inválido:`, value);
+              console.error(`❌ ${key} valor inválido:`, value, '→', numValue);
               setLastError(`${key} deve ser um número positivo.`);
               return false;
             }
             cleanPatch[key] = numValue;
           }
-          console.log(`✅ ${key} → ${cleanPatch[key]}`);
+          console.log(`✅ ${key} → ${cleanPatch[key]} (${typeof cleanPatch[key]})`);
         }
         else if (key === 'status') {
           // Status deve ser enum válido
@@ -386,13 +397,22 @@ export default function Matches() {
           console.log(`✅ meta → ${JSON.stringify(cleanPatch[key])}`);
         }
         else {
-          // Outros campos passam direto mas com warning
+          // Outros campos - validação extra para evitar UUIDs em campos numéricos
+          if (typeof value === 'string' && uuidRegex.test(value)) {
+            console.error(`❌ Campo ${key} recebeu UUID quando deveria ser ${typeof value}:`, value);
+            setLastError(`Erro interno: ${key} recebeu UUID inválido.`);
+            return false;
+          }
+          
           console.warn(`⚠️ Campo ${key} não validado explicitamente:`, value);
           cleanPatch[key] = value;
         }
       }
 
       console.log('🔄 Patch final:', JSON.stringify(cleanPatch, null, 2));
+      console.log('🔄 Tipos finais:', Object.fromEntries(
+        Object.entries(cleanPatch).map(([k, v]) => [k, typeof v])
+      ));
       console.log('🔄 Executando UPDATE...');
 
       const { data, error } = await supabase
@@ -460,6 +480,15 @@ export default function Matches() {
     if (action === "inc") next += 1;
     if (action === "dec") next = Math.max(0, next - 1);
     if (action === "reset") next = 0;
+    
+    console.log(`🔄 changePoints: ${team} ${action}`, {
+      matchId: m.id,
+      key,
+      currentValue: m[key],
+      nextValue: next,
+      patch: { [key]: next }
+    });
+    
     await mutate(m.id, { [key]: next });
   };
 
