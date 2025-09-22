@@ -1,21 +1,29 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-/**
- * Vite configuration. We register the React plugin so that JSX and TSX
- * files are compiled correctly. Vite automatically reads the `.env` file
- * prefixed with VITE_ and exposes those variables to the client.
- */
 export default defineConfig({
   plugins: [react()],
   server: {
     port: 3000,
     open: true,
-    historyApiFallback: true,
+    historyApiFallback: {
+      index: '/index.html',
+      rewrites: [
+        { from: /^\/admin/, to: '/index.html' },
+        { from: /^\/futsal/, to: '/index.html' },
+        { from: /^\/volei/, to: '/index.html' },
+        { from: /^\/fifa/, to: '/index.html' },
+        { from: /^\/pebolim/, to: '/index.html' },
+        { from: /.*/, to: '/index.html' }
+      ]
+    }
   },
   preview: {
     port: 3000,
     open: true,
+    historyApiFallback: {
+      index: '/index.html'
+    }
   },
   build: {
     outDir: 'dist',
