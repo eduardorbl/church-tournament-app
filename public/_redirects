@@ -1,1 +1,9 @@
+# SPA fallback
 /*    /index.html   200
+
+# Específico para rotas admin
+/admin/*    /index.html   200
+/futsal/*   /index.html   200
+/volei/*    /index.html   200
+/fifa/*     /index.html   200
+/pebolim/*  /index.html   200

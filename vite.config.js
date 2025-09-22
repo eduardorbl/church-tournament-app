@@ -6,27 +6,20 @@ export default defineConfig({
   server: {
     port: 3000,
     open: true,
-    historyApiFallback: {
-      index: '/index.html',
-      rewrites: [
-        { from: /^\/admin/, to: '/index.html' },
-        { from: /^\/futsal/, to: '/index.html' },
-        { from: /^\/volei/, to: '/index.html' },
-        { from: /^\/fifa/, to: '/index.html' },
-        { from: /^\/pebolim/, to: '/index.html' },
-        { from: /.*/, to: '/index.html' }
-      ]
-    }
+    // Configuração mais simples e efetiva
+    historyApiFallback: true,
+    // Configuração adicional para garantir que funcione
+    middlewareMode: false,
   },
   preview: {
     port: 3000,
     open: true,
-    historyApiFallback: {
-      index: '/index.html'
-    }
+    historyApiFallback: true,
   },
   build: {
     outDir: 'dist',
+    // Garante que os assets sejam servidos corretamente
+    assetsDir: 'assets',
     rollupOptions: {
       output: {
         manualChunks: {
@@ -35,5 +28,7 @@ export default defineConfig({
         }
       }
     }
-  }
+  },
+  // Configuração base para garantir roteamento correto
+  base: '/',
 });
