@@ -1,8 +1,13 @@
-// src/pages/Admin.jsx
 import React from "react";
-import { Link } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 
 export default function Admin() {
+  const navigate = useNavigate();
+
+  const handleNavigation = (path) => {
+    navigate(path);
+  };
+
   return (
     <div className="space-y-6">
       <header>
@@ -14,9 +19,9 @@ export default function Admin() {
 
       <div className="grid gap-4 md:grid-cols-3">
         {/* 1) Elencos */}
-        <Link
-          to="/admin/elencos"
-          className="group block rounded-xl border p-5 shadow-sm hover:shadow-md hover:border-primary/50 transition"
+        <button
+          onClick={() => handleNavigation("/admin/elencos")}
+          className="group block rounded-xl border p-5 shadow-sm hover:shadow-md hover:border-primary/50 transition text-left w-full"
         >
           <div className="flex items-center gap-3">
             <div className="h-10 w-10 grid place-items-center rounded-lg bg-primary/10">
@@ -32,12 +37,12 @@ export default function Admin() {
           <div className="mt-3 text-primary text-sm font-medium group-hover:underline">
             Abrir &rarr;
           </div>
-        </Link>
+        </button>
 
         {/* 2) Campeonatos */}
-        <Link
-          to="/admin/campeonatos"
-          className="group block rounded-xl border p-5 shadow-sm hover:shadow-md hover:border-primary/50 transition"
+        <button
+          onClick={() => handleNavigation("/admin/campeonatos")}
+          className="group block rounded-xl border p-5 shadow-sm hover:shadow-md hover:border-primary/50 transition text-left w-full"
         >
           <div className="flex items-center gap-3">
             <div className="h-10 w-10 grid place-items-center rounded-lg bg-primary/10">
@@ -53,12 +58,12 @@ export default function Admin() {
           <div className="mt-3 text-primary text-sm font-medium group-hover:underline">
             Abrir &rarr;
           </div>
-        </Link>
+        </button>
 
         {/* 3) Partidas */}
-        <Link
-          to="/admin/partidas" // ✅ certifique-se de que esta rota existe no App.jsx
-          className="group block rounded-xl border p-5 shadow-sm hover:shadow-md hover:border-primary/50 transition"
+        <button
+          onClick={() => handleNavigation("/admin/partidas")}
+          className="group block rounded-xl border p-5 shadow-sm hover:shadow-md hover:border-primary/50 transition text-left w-full"
         >
           <div className="flex items-center gap-3">
             <div className="h-10 w-10 grid place-items-center rounded-lg bg-primary/10">
@@ -74,7 +79,7 @@ export default function Admin() {
           <div className="mt-3 text-primary text-sm font-medium group-hover:underline">
             Abrir &rarr;
           </div>
-        </Link>
+        </button>
       </div>
     </div>
   );

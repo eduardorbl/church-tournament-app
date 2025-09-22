@@ -1,5 +1,5 @@
-import React from "react";
-import { Routes, Route, Link, useLocation } from "react-router-dom";
+import React, { useEffect } from "react";
+import { Routes, Route, Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "./auth/AuthProvider";
 import RequireAdmin from "./components/RequireAdmin";
 import ErrorBoundary from "./components/ErrorBoundary";
@@ -29,6 +29,8 @@ import PebolimTournament from "./pages/admin/PebolimTournament";
 
 // Componente para páginas não encontradas
 function NotFound() {
+  const navigate = useNavigate();
+  
   return (
     <div className="text-center py-12">
       <div className="max-w-md mx-auto">
@@ -39,18 +41,18 @@ function NotFound() {
         <p className="text-gray-600 mb-6">
           A página que você está procurando não existe ou foi movida.
         </p>
-        <div className="space-x-4">
-          <Link 
-            to="/" 
-            className="inline-block bg-primary text-white px-6 py-2 rounded-lg hover:bg-primary/90 transition-colors"
+        <div className="space-y-3">
+          <button
+            onClick={() => navigate('/', { replace: true })}
+            className="block w-full bg-primary text-white px-6 py-2 rounded-lg hover:bg-primary/90 transition-colors"
           >
             Voltar ao Início
-          </Link>
+          </button>
           <button
             onClick={() => window.history.back()}
-            className="inline-block bg-gray-500 text-white px-6 py-2 rounded-lg hover:bg-gray-600 transition-colors"
+            className="block w-full bg-gray-500 text-white px-6 py-2 rounded-lg hover:bg-gray-600 transition-colors"
           >
-            Voltar
+            Página Anterior
           </button>
         </div>
       </div>
@@ -70,9 +72,39 @@ function LoadingFallback() {
   );
 }
 
+// Componente wrapper para navegação segura
+function SafeNavLink({ to, children, className, onClick, ...props }) {
+  const navigate = useNavigate();
+  
+  const handleClick = (e) => {
+    e.preventDefault();
+    if (onClick) onClick(e);
+    
+    // Usar replace para evitar problemas de histórico
+    navigate(to, { replace: false });
+  };
+  
+  return (
+    <Link 
+      to={to} 
+      className={className} 
+      onClick={handleClick}
+      {...props}
+    >
+      {children}
+    </Link>
+  );
+}
+
 export default function App() {
   const { session, isAdmin, ready, signOut, needsPasswordSetup, loading } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
+
+  // Debug: log mudanças de rota
+  useEffect(() => {
+    console.log('Route changed to:', location.pathname);
+  }, [location.pathname]);
 
   // Loading state enquanto a autenticação está sendo verificada
   if (!ready || loading) {
@@ -88,84 +120,94 @@ export default function App() {
     );
   }
 
+  // Função para logout seguro
+  const handleSignOut = async () => {
+    try {
+      await signOut();
+      navigate('/', { replace: true });
+    } catch (error) {
+      console.error('Error during signout:', error);
+    }
+  };
+
   return (
     <ErrorBoundary>
       <div className="min-h-screen flex flex-col">
         {/* HEADER */}
         <header className="bg-primary text-white p-4 sticky top-0 z-50 shadow-md">
           <div className="container mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
-            <Link to="/" className="text-xl font-bold hover:opacity-90 transition-opacity">
+            <SafeNavLink to="/" className="text-xl font-bold hover:opacity-90 transition-opacity">
               Copa Influence 🏆
-            </Link>
+            </SafeNavLink>
 
             <nav className="flex flex-wrap items-center gap-3 text-sm">
-              <Link 
+              <SafeNavLink 
                 to="/" 
                 className={`hover:underline transition-colors ${
                   location.pathname === '/' ? 'font-semibold' : ''
                 }`}
               >
                 Home
-              </Link>
-              <Link 
+              </SafeNavLink>
+              <SafeNavLink 
                 to="/futsal" 
                 className={`hover:underline transition-colors ${
                   location.pathname === '/futsal' ? 'font-semibold' : ''
                 }`}
               >
                 Futsal
-              </Link>
-              <Link 
+              </SafeNavLink>
+              <SafeNavLink 
                 to="/volei" 
                 className={`hover:underline transition-colors ${
                   location.pathname === '/volei' ? 'font-semibold' : ''
                 }`}
               >
                 Vôlei
-              </Link>
-              <Link 
+              </SafeNavLink>
+              <SafeNavLink 
                 to="/fifa" 
                 className={`hover:underline transition-colors ${
                   location.pathname === '/fifa' ? 'font-semibold' : ''
                 }`}
               >
                 FIFA
-              </Link>
-              <Link 
+              </SafeNavLink>
+              <SafeNavLink 
                 to="/pebolim" 
                 className={`hover:underline transition-colors ${
                   location.pathname === '/pebolim' ? 'font-semibold' : ''
                 }`}
               >
                 Pebolim
-              </Link>
-              <Link 
+              </SafeNavLink>
+              <SafeNavLink 
                 to="/ao-vivo" 
                 className={`hover:underline transition-colors ${
                   location.pathname === '/ao-vivo' ? 'font-semibold' : ''
                 }`}
               >
                 Ao vivo
-              </Link>
-              <Link 
+              </SafeNavLink>
+              <SafeNavLink 
                 to="/proximos" 
                 className={`hover:underline transition-colors ${
                   location.pathname === '/proximos' ? 'font-semibold' : ''
                 }`}
               >
                 Próximos
-              </Link>
+              </SafeNavLink>
 
               {/* Link admin só se logado e admin */}
               {ready && isAdmin && (
-                <Link
+                <SafeNavLink
                   to="/admin"
                   className={`ml-2 inline-block bg-white/15 hover:bg-white/25 transition-colors px-3 py-1 rounded ${
                     location.pathname.startsWith('/admin') ? 'bg-white/25 font-semibold' : ''
                   }`}
                 >
                   Administrador
-                </Link>
+                </SafeNavLink>
               )}
             </nav>
 
@@ -178,19 +220,19 @@ export default function App() {
                     </span>
                   )}
                   <button 
-                    onClick={signOut} 
+                    onClick={handleSignOut} 
                     className="hover:underline transition-colors hover:text-white/80"
                   >
                     Sair
                   </button>
                 </div>
               ) : (
-                <Link 
+                <SafeNavLink 
                   to="/login" 
                   className="hover:underline transition-colors hover:text-white/80"
                 >
                   Entrar
-                </Link>
+                </SafeNavLink>
               )}
             </div>
           </div>
@@ -199,7 +241,7 @@ export default function App() {
         {/* MAIN */}
         <main className="flex-1 container mx-auto p-4">
           <React.Suspense fallback={<LoadingFallback />}>
-            <Routes key={location.pathname}>
+            <Routes>
               {/* Rotas públicas */}
               <Route path="/" element={<Home />} />
               <Route path="/futsal" element={<Futsal />} />
@@ -227,12 +269,12 @@ export default function App() {
                   session ? (
                     <div className="text-center py-8">
                       <p className="text-gray-600 mb-4">Você já está logado.</p>
-                      <Link 
+                      <SafeNavLink 
                         to={isAdmin ? "/admin" : "/"} 
                         className="bg-primary text-white px-4 py-2 rounded hover:bg-primary/90"
                       >
                         {isAdmin ? "Ir para Admin" : "Voltar ao Início"}
-                      </Link>
+                      </SafeNavLink>
                     </div>
                   ) : (
                     <Login />
