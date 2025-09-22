@@ -13,7 +13,9 @@ export default function SetPassword() {
   const [err, setErr] = useState(null);
 
   useEffect(() => {
+    console.log('SetPassword mounted, user:', user);
     if (!user) {
+      console.log('No user found');
       setErr("Sua sessão expirou. Faça login novamente.");
       setTimeout(() => nav("/login"), 2000);
     }
@@ -21,56 +23,81 @@ export default function SetPassword() {
 
   async function handleSubmit(e) {
     e.preventDefault();
-    if (submitting) return;
+    console.log('Form submitted');
+    
+    if (submitting) {
+      console.log('Already submitting, returning');
+      return;
+    }
     
     setMsg(null); 
     setErr(null);
     setSubmitting(true);
+    console.log('Set submitting to true');
 
     if (!pwd || pwd.length < 8) {
+      console.log('Password too short');
       setErr("A senha deve ter pelo menos 8 caracteres.");
       setSubmitting(false);
       return;
     }
     if (pwd !== pwd2) {
+      console.log('Passwords do not match');
       setErr("As senhas não coincidem.");
       setSubmitting(false);
       return;
     }
 
+    console.log('Starting password update...');
+    
     try {
-      console.log('Atualizando senha...');
-      
-      // Atualiza a senha e marca que foi configurada
+      // Primeiro, vamos tentar só atualizar a senha sem metadata
+      console.log('Calling updateUser...');
       const { error } = await supabase.auth.updateUser({ 
-        password: pwd,
-        data: { password_set: true }
+        password: pwd
       });
+      console.log('UpdateUser completed, error:', error);
 
       if (error) {
-        console.error('Erro ao atualizar senha:', error);
-        setErr(error.message || "Não foi possível atualizar a senha.");
+        console.error('UpdateUser error:', error);
+        setErr(`Erro: ${error.message}`);
         setSubmitting(false);
         return;
       }
       
-      console.log('Senha atualizada com sucesso');
+      console.log('Password updated successfully');
+      
+      // Agora vamos tentar atualizar o metadata separadamente
+      try {
+        console.log('Updating metadata...');
+        await supabase.auth.updateUser({ 
+          data: { password_set: true }
+        });
+        console.log('Metadata updated');
+      } catch (metaError) {
+        console.warn('Metadata update failed, but continuing:', metaError);
+      }
+      
       setMsg("Senha definida com sucesso!");
+      console.log('Setting needsPasswordSetup to false');
       setNeedsPasswordSetup(false);
       
-      // Redireciona direto para admin sem verificar RPC
+      console.log('Starting redirect timeout');
       setTimeout(() => {
-        console.log('Redirecionando...');
+        console.log('Executing redirect');
         setSubmitting(false);
         nav('/admin', { replace: true });
-      }, 1000);
+      }, 1500);
       
     } catch (error) {
-      console.error('Erro inesperado:', error);
-      setErr("Erro inesperado. Tente novamente.");
+      console.error('Caught error:', error);
+      setErr(`Erro inesperado: ${error.message}`);
       setSubmitting(false);
     }
   }
+
+  // Debug: mostrar informações do usuário
+  console.log('Rendering SetPassword, user:', user, 'submitting:', submitting);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -78,6 +105,10 @@ export default function SetPassword() {
         <div className="text-center mb-6">
           <h2 className="text-2xl font-bold text-gray-900">Bem-vindo!</h2>
           <p className="text-gray-600 mt-2">Defina sua senha para continuar</p>
+          {/* Debug info */}
+          <p className="text-xs text-gray-400 mt-2">
+            User ID: {user?.id?.slice(0, 8)}... | Email: {user?.email}
+          </p>
         </div>
         
         {msg && <p className="mb-3 text-green-700 text-center">{msg}</p>}
@@ -122,6 +153,18 @@ export default function SetPassword() {
             className="w-full bg-blue-600 text-white py-3 rounded-md font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             {submitting ? "Salvando…" : "Definir senha"}
+          </button>
+          
+          {/* Debug button */}
+          <button
+            type="button"
+            onClick={() => {
+              console.log('Debug - force reset submitting');
+              setSubmitting(false);
+            }}
+            className="w-full text-xs text-gray-500 mt-2"
+          >
+            [Debug] Reset submitting
           </button>
         </form>
       </div>
