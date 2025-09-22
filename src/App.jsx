@@ -3,6 +3,7 @@ import { Routes, Route, Link, useLocation, useNavigate } from "react-router-dom"
 import { useAuth } from "./auth/AuthProvider";
 import RequireAdmin from "./components/RequireAdmin";
 import ErrorBoundary from "./components/ErrorBoundary";
+import RouterGuard from "./components/RouterGuard";
 
 // Páginas públicas
 import Home from "./pages/Home";
@@ -115,7 +116,9 @@ export default function App() {
   if (needsPasswordSetup) {
     return (
       <ErrorBoundary>
-        <SetPassword />
+        <RouterGuard>
+          <SetPassword />
+        </RouterGuard>
       </ErrorBoundary>
     );
   }
@@ -132,240 +135,242 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-      <div className="min-h-screen flex flex-col">
-        {/* HEADER */}
-        <header className="bg-primary text-white p-4 sticky top-0 z-50 shadow-md">
-          <div className="container mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
-            <SafeNavLink to="/" className="text-xl font-bold hover:opacity-90 transition-opacity">
-              Copa Influence 🏆
-            </SafeNavLink>
-
-            <nav className="flex flex-wrap items-center gap-3 text-sm">
-              <SafeNavLink 
-                to="/" 
-                className={`hover:underline transition-colors ${
-                  location.pathname === '/' ? 'font-semibold' : ''
-                }`}
-              >
-                Home
-              </SafeNavLink>
-              <SafeNavLink 
-                to="/futsal" 
-                className={`hover:underline transition-colors ${
-                  location.pathname === '/futsal' ? 'font-semibold' : ''
-                }`}
-              >
-                Futsal
-              </SafeNavLink>
-              <SafeNavLink 
-                to="/volei" 
-                className={`hover:underline transition-colors ${
-                  location.pathname === '/volei' ? 'font-semibold' : ''
-                }`}
-              >
-                Vôlei
-              </SafeNavLink>
-              <SafeNavLink 
-                to="/fifa" 
-                className={`hover:underline transition-colors ${
-                  location.pathname === '/fifa' ? 'font-semibold' : ''
-                }`}
-              >
-                FIFA
-              </SafeNavLink>
-              <SafeNavLink 
-                to="/pebolim" 
-                className={`hover:underline transition-colors ${
-                  location.pathname === '/pebolim' ? 'font-semibold' : ''
-                }`}
-              >
-                Pebolim
-              </SafeNavLink>
-              <SafeNavLink 
-                to="/ao-vivo" 
-                className={`hover:underline transition-colors ${
-                  location.pathname === '/ao-vivo' ? 'font-semibold' : ''
-                }`}
-              >
-                Ao vivo
-              </SafeNavLink>
-              <SafeNavLink 
-                to="/proximos" 
-                className={`hover:underline transition-colors ${
-                  location.pathname === '/proximos' ? 'font-semibold' : ''
-                }`}
-              >
-                Próximos
+      <RouterGuard>
+        <div className="min-h-screen flex flex-col">
+          {/* HEADER */}
+          <header className="bg-primary text-white p-4 sticky top-0 z-50 shadow-md">
+            <div className="container mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
+              <SafeNavLink to="/" className="text-xl font-bold hover:opacity-90 transition-opacity">
+                Copa Influence 🏆
               </SafeNavLink>
 
-              {/* Link admin só se logado e admin */}
-              {ready && isAdmin && (
-                <SafeNavLink
-                  to="/admin"
-                  className={`ml-2 inline-block bg-white/15 hover:bg-white/25 transition-colors px-3 py-1 rounded ${
-                    location.pathname.startsWith('/admin') ? 'bg-white/25 font-semibold' : ''
+              <nav className="flex flex-wrap items-center gap-3 text-sm">
+                <SafeNavLink 
+                  to="/" 
+                  className={`hover:underline transition-colors ${
+                    location.pathname === '/' ? 'font-semibold' : ''
                   }`}
                 >
-                  Administrador
+                  Home
                 </SafeNavLink>
-              )}
-            </nav>
+                <SafeNavLink 
+                  to="/futsal" 
+                  className={`hover:underline transition-colors ${
+                    location.pathname === '/futsal' ? 'font-semibold' : ''
+                  }`}
+                >
+                  Futsal
+                </SafeNavLink>
+                <SafeNavLink 
+                  to="/volei" 
+                  className={`hover:underline transition-colors ${
+                    location.pathname === '/volei' ? 'font-semibold' : ''
+                  }`}
+                >
+                  Vôlei
+                </SafeNavLink>
+                <SafeNavLink 
+                  to="/fifa" 
+                  className={`hover:underline transition-colors ${
+                    location.pathname === '/fifa' ? 'font-semibold' : ''
+                  }`}
+                >
+                  FIFA
+                </SafeNavLink>
+                <SafeNavLink 
+                  to="/pebolim" 
+                  className={`hover:underline transition-colors ${
+                    location.pathname === '/pebolim' ? 'font-semibold' : ''
+                  }`}
+                >
+                  Pebolim
+                </SafeNavLink>
+                <SafeNavLink 
+                  to="/ao-vivo" 
+                  className={`hover:underline transition-colors ${
+                    location.pathname === '/ao-vivo' ? 'font-semibold' : ''
+                  }`}
+                >
+                  Ao vivo
+                </SafeNavLink>
+                <SafeNavLink 
+                  to="/proximos" 
+                  className={`hover:underline transition-colors ${
+                    location.pathname === '/proximos' ? 'font-semibold' : ''
+                  }`}
+                >
+                  Próximos
+                </SafeNavLink>
 
-            <div className="text-sm">
-              {session ? (
-                <div className="flex items-center gap-3">
-                  {session.user?.email && (
-                    <span className="text-white/80 text-xs">
-                      {session.user.email}
-                    </span>
-                  )}
-                  <button 
-                    onClick={handleSignOut} 
+                {/* Link admin só se logado e admin */}
+                {ready && isAdmin && (
+                  <SafeNavLink
+                    to="/admin"
+                    className={`ml-2 inline-block bg-white/15 hover:bg-white/25 transition-colors px-3 py-1 rounded ${
+                      location.pathname.startsWith('/admin') ? 'bg-white/25 font-semibold' : ''
+                    }`}
+                  >
+                    Administrador
+                  </SafeNavLink>
+                )}
+              </nav>
+
+              <div className="text-sm">
+                {session ? (
+                  <div className="flex items-center gap-3">
+                    {session.user?.email && (
+                      <span className="text-white/80 text-xs">
+                        {session.user.email}
+                      </span>
+                    )}
+                    <button 
+                      onClick={handleSignOut} 
+                      className="hover:underline transition-colors hover:text-white/80"
+                    >
+                      Sair
+                    </button>
+                  </div>
+                ) : (
+                  <SafeNavLink 
+                    to="/login" 
                     className="hover:underline transition-colors hover:text-white/80"
                   >
-                    Sair
-                  </button>
-                </div>
-              ) : (
-                <SafeNavLink 
-                  to="/login" 
-                  className="hover:underline transition-colors hover:text-white/80"
-                >
-                  Entrar
-                </SafeNavLink>
-              )}
+                    Entrar
+                  </SafeNavLink>
+                )}
+              </div>
             </div>
-          </div>
-        </header>
+          </header>
 
-        {/* MAIN */}
-        <main className="flex-1 container mx-auto p-4">
-          <React.Suspense fallback={<LoadingFallback />}>
-            <Routes>
-              {/* Rotas públicas */}
-              <Route path="/" element={<Home />} />
-              <Route path="/futsal" element={<Futsal />} />
-              <Route path="/volei" element={<Volei />} />
-              <Route path="/fifa" element={<FIFA />} />
-              <Route path="/pebolim" element={<Pebolim />} />
-              <Route path="/ao-vivo" element={<Live />} />
-              <Route path="/proximos" element={<Upcoming />} />
+          {/* MAIN */}
+          <main className="flex-1 container mx-auto p-4">
+            <React.Suspense fallback={<LoadingFallback />}>
+              <Routes>
+                {/* Rotas públicas */}
+                <Route path="/" element={<Home />} />
+                <Route path="/futsal" element={<Futsal />} />
+                <Route path="/volei" element={<Volei />} />
+                <Route path="/fifa" element={<FIFA />} />
+                <Route path="/pebolim" element={<Pebolim />} />
+                <Route path="/ao-vivo" element={<Live />} />
+                <Route path="/proximos" element={<Upcoming />} />
 
-              {/* TeamPage - aceitar ambos padrões */}
-              <Route path="/team/:id" element={<TeamPage />} />
-              <Route path="/times/:id" element={<TeamPage />} />
+                {/* TeamPage - aceitar ambos padrões */}
+                <Route path="/team/:id" element={<TeamPage />} />
+                <Route path="/times/:id" element={<TeamPage />} />
 
-              {/* MatchPage - aceitar ambos padrões */}
-              <Route path="/match/:id" element={<MatchPage />} />
-              <Route path="/partida/:id" element={<MatchPage />} />
+                {/* MatchPage - aceitar ambos padrões */}
+                <Route path="/match/:id" element={<MatchPage />} />
+                <Route path="/partida/:id" element={<MatchPage />} />
 
-              {/* Rota para definir senha */}
-              <Route path="/set-password" element={<SetPassword />} />
+                {/* Rota para definir senha */}
+                <Route path="/set-password" element={<SetPassword />} />
 
-              {/* Login - só mostra se não estiver logado */}
-              <Route 
-                path="/login" 
-                element={
-                  session ? (
-                    <div className="text-center py-8">
-                      <p className="text-gray-600 mb-4">Você já está logado.</p>
-                      <SafeNavLink 
-                        to={isAdmin ? "/admin" : "/"} 
-                        className="bg-primary text-white px-4 py-2 rounded hover:bg-primary/90"
-                      >
-                        {isAdmin ? "Ir para Admin" : "Voltar ao Início"}
-                      </SafeNavLink>
-                    </div>
-                  ) : (
-                    <Login />
-                  )
-                } 
-              />
+                {/* Login - só mostra se não estiver logado */}
+                <Route 
+                  path="/login" 
+                  element={
+                    session ? (
+                      <div className="text-center py-8">
+                        <p className="text-gray-600 mb-4">Você já está logado.</p>
+                        <SafeNavLink 
+                          to={isAdmin ? "/admin" : "/"} 
+                          className="bg-primary text-white px-4 py-2 rounded hover:bg-primary/90"
+                        >
+                          {isAdmin ? "Ir para Admin" : "Voltar ao Início"}
+                        </SafeNavLink>
+                      </div>
+                    ) : (
+                      <Login />
+                    )
+                  } 
+                />
 
-              {/* Rotas admin protegidas */}
-              <Route
-                path="/admin"
-                element={
-                  <RequireAdmin>
-                    <Admin />
-                  </RequireAdmin>
-                }
-              />
-              <Route
-                path="/admin/elencos"
-                element={
-                  <RequireAdmin>
-                    <AdminRosters />
-                  </RequireAdmin>
-                }
-              />
-              <Route
-                path="/admin/partidas"
-                element={
-                  <RequireAdmin>
-                    <AdminMatches />
-                  </RequireAdmin>
-                }
-              />
-              <Route
-                path="/admin/campeonatos"
-                element={
-                  <RequireAdmin>
-                    <AdminTournaments />
-                  </RequireAdmin>
-                }
-              />
+                {/* Rotas admin protegidas */}
+                <Route
+                  path="/admin"
+                  element={
+                    <RequireAdmin>
+                      <Admin />
+                    </RequireAdmin>
+                  }
+                />
+                <Route
+                  path="/admin/elencos"
+                  element={
+                    <RequireAdmin>
+                      <AdminRosters />
+                    </RequireAdmin>
+                  }
+                />
+                <Route
+                  path="/admin/partidas"
+                  element={
+                    <RequireAdmin>
+                      <AdminMatches />
+                    </RequireAdmin>
+                  }
+                />
+                <Route
+                  path="/admin/campeonatos"
+                  element={
+                    <RequireAdmin>
+                      <AdminTournaments />
+                    </RequireAdmin>
+                  }
+                />
 
-              {/* Campeonatos específicos */}
-              <Route
-                path="/admin/campeonatos/futsal"
-                element={
-                  <RequireAdmin>
-                    <FutsalTournament />
-                  </RequireAdmin>
-                }
-              />
-              <Route
-                path="/admin/campeonatos/volei"
-                element={
-                  <RequireAdmin>
-                    <VoleiTournament />
-                  </RequireAdmin>
-                }
-              />
-              <Route
-                path="/admin/campeonatos/fifa"
-                element={
-                  <RequireAdmin>
-                    <FIFATournament />
-                  </RequireAdmin>
-                }
-              />
-              <Route
-                path="/admin/campeonatos/pebolim"
-                element={
-                  <RequireAdmin>
-                    <PebolimTournament />
-                  </RequireAdmin>
-                }
-              />
+                {/* Campeonatos específicos */}
+                <Route
+                  path="/admin/campeonatos/futsal"
+                  element={
+                    <RequireAdmin>
+                      <FutsalTournament />
+                    </RequireAdmin>
+                  }
+                />
+                <Route
+                  path="/admin/campeonatos/volei"
+                  element={
+                    <RequireAdmin>
+                      <VoleiTournament />
+                    </RequireAdmin>
+                  }
+                />
+                <Route
+                  path="/admin/campeonatos/fifa"
+                  element={
+                    <RequireAdmin>
+                      <FIFATournament />
+                    </RequireAdmin>
+                  }
+                />
+                <Route
+                  path="/admin/campeonatos/pebolim"
+                  element={
+                    <RequireAdmin>
+                      <PebolimTournament />
+                    </RequireAdmin>
+                  }
+                />
 
-              {/* Catch-all route para páginas não encontradas */}
-              <Route path="*" element={<NotFound />} />
-            </Routes>
-          </React.Suspense>
-        </main>
+                {/* Catch-all route para páginas não encontradas */}
+                <Route path="*" element={<NotFound />} />
+              </Routes>
+            </React.Suspense>
+          </main>
 
-        {/* FOOTER */}
-        <footer className="bg-gray-200 p-4 text-center text-xs text-gray-700 mt-auto">
-          <div className="container mx-auto">
-            <p>&copy; {new Date().getFullYear()} Copa Influence</p>
-            <p className="mt-1 text-gray-500">
-              Desenvolvido para a comunidade da igreja
-            </p>
-          </div>
-        </footer>
-      </div>
+          {/* FOOTER */}
+          <footer className="bg-gray-200 p-4 text-center text-xs text-gray-700 mt-auto">
+            <div className="container mx-auto">
+              <p>&copy; {new Date().getFullYear()} Copa Influence</p>
+              <p className="mt-1 text-gray-500">
+                Desenvolvido para a comunidade da igreja
+              </p>
+            </div>
+          </footer>
+        </div>
+      </RouterGuard>
     </ErrorBoundary>
   );
 }
