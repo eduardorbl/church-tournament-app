@@ -14,90 +14,56 @@ export default function SetPassword() {
 
   useEffect(() => {
     console.log('SetPassword mounted, user:', user);
-    if (!user) {
-      console.log('No user found');
-      setErr("Sua sessão expirou. Faça login novamente.");
-      setTimeout(() => nav("/login"), 2000);
-    }
-  }, [user, nav]);
+  }, [user]);
 
-  async function handleSubmit(e) {
+  const handleSubmit = (e) => {
     e.preventDefault();
-    console.log('Form submitted');
+    console.log('🔥 FORM SUBMITTED - START');
+    console.log('pwd:', pwd, 'pwd2:', pwd2, 'submitting:', submitting);
     
     if (submitting) {
       console.log('Already submitting, returning');
       return;
     }
     
-    setMsg(null); 
-    setErr(null);
     setSubmitting(true);
-    console.log('Set submitting to true');
-
+    console.log('✅ Set submitting to true');
+    
     if (!pwd || pwd.length < 8) {
-      console.log('Password too short');
+      console.log('❌ Password too short');
       setErr("A senha deve ter pelo menos 8 caracteres.");
       setSubmitting(false);
       return;
     }
     if (pwd !== pwd2) {
-      console.log('Passwords do not match');
+      console.log('❌ Passwords do not match');
       setErr("As senhas não coincidem.");
       setSubmitting(false);
       return;
     }
 
-    console.log('Starting password update...');
+    console.log('🚀 Starting API call...');
     
-    try {
-      // Primeiro, vamos tentar só atualizar a senha sem metadata
-      console.log('Calling updateUser...');
-      const { error } = await supabase.auth.updateUser({ 
-        password: pwd
-      });
-      console.log('UpdateUser completed, error:', error);
-
-      if (error) {
-        console.error('UpdateUser error:', error);
-        setErr(`Erro: ${error.message}`);
-        setSubmitting(false);
-        return;
-      }
-      
-      console.log('Password updated successfully');
-      
-      // Agora vamos tentar atualizar o metadata separadamente
-      try {
-        console.log('Updating metadata...');
-        await supabase.auth.updateUser({ 
-          data: { password_set: true }
-        });
-        console.log('Metadata updated');
-      } catch (metaError) {
-        console.warn('Metadata update failed, but continuing:', metaError);
-      }
-      
-      setMsg("Senha definida com sucesso!");
-      console.log('Setting needsPasswordSetup to false');
+    // Versão ultra simples para testar
+    setTimeout(() => {
+      console.log('⏰ Timeout finished - simulating success');
+      setMsg("Senha simulada com sucesso!");
       setNeedsPasswordSetup(false);
-      
-      console.log('Starting redirect timeout');
-      setTimeout(() => {
-        console.log('Executing redirect');
-        setSubmitting(false);
-        nav('/admin', { replace: true });
-      }, 1500);
-      
-    } catch (error) {
-      console.error('Caught error:', error);
-      setErr(`Erro inesperado: ${error.message}`);
       setSubmitting(false);
-    }
-  }
+      
+      setTimeout(() => {
+        console.log('🎯 Navigating to admin');
+        nav('/admin', { replace: true });
+      }, 1000);
+    }, 2000);
+  };
 
-  // Debug: mostrar informações do usuário
-  console.log('Rendering SetPassword, user:', user, 'submitting:', submitting);
+  const handleButtonClick = () => {
+    console.log('🖱️ BUTTON CLICKED DIRECTLY');
+    setSubmitting(!submitting);
+  };
+
+  console.log('🔄 Rendering SetPassword - submitting:', submitting);
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
@@ -105,9 +71,11 @@ export default function SetPassword() {
         <div className="text-center mb-6">
           <h2 className="text-2xl font-bold text-gray-900">Bem-vindo!</h2>
           <p className="text-gray-600 mt-2">Defina sua senha para continuar</p>
-          {/* Debug info */}
           <p className="text-xs text-gray-400 mt-2">
             User ID: {user?.id?.slice(0, 8)}... | Email: {user?.email}
+          </p>
+          <p className="text-xs text-red-500">
+            Submitting: {submitting ? 'TRUE' : 'FALSE'}
           </p>
         </div>
         
@@ -122,12 +90,13 @@ export default function SetPassword() {
             <input
               type="password"
               placeholder="Mínimo 8 caracteres"
-              className="w-full p-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              className="w-full p-3 border border-gray-300 rounded-md"
               value={pwd}
-              onChange={(e) => setPwd(e.target.value)}
-              autoComplete="new-password"
+              onChange={(e) => {
+                console.log('Password changed:', e.target.value);
+                setPwd(e.target.value);
+              }}
               required
-              disabled={submitting}
             />
           </div>
           
@@ -138,35 +107,51 @@ export default function SetPassword() {
             <input
               type="password"
               placeholder="Digite a senha novamente"
-              className="w-full p-3 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+              className="w-full p-3 border border-gray-300 rounded-md"
               value={pwd2}
-              onChange={(e) => setPwd2(e.target.value)}
-              autoComplete="new-password"
+              onChange={(e) => {
+                console.log('Password2 changed:', e.target.value);
+                setPwd2(e.target.value);
+              }}
               required
-              disabled={submitting}
             />
           </div>
           
           <button
             type="submit"
             disabled={submitting}
-            className="w-full bg-blue-600 text-white py-3 rounded-md font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            className="w-full bg-blue-600 text-white py-3 rounded-md font-medium hover:bg-blue-700 disabled:opacity-50"
+            onClick={() => console.log('🖱️ Submit button clicked')}
           >
             {submitting ? "Salvando…" : "Definir senha"}
           </button>
+        </form>
+
+        {/* Debug buttons */}
+        <div className="mt-4 space-y-2">
+          <button
+            type="button"
+            onClick={handleButtonClick}
+            className="w-full text-xs bg-gray-200 py-2 rounded"
+          >
+            [Debug] Toggle submitting
+          </button>
           
-          {/* Debug button */}
           <button
             type="button"
             onClick={() => {
-              console.log('Debug - force reset submitting');
-              setSubmitting(false);
+              console.log('🧪 Direct form submit test');
+              const form = document.querySelector('form');
+              if (form) {
+                console.log('Form found, dispatching submit event');
+                form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+              }
             }}
-            className="w-full text-xs text-gray-500 mt-2"
+            className="w-full text-xs bg-yellow-200 py-2 rounded"
           >
-            [Debug] Reset submitting
+            [Debug] Force form submit
           </button>
-        </form>
+        </div>
       </div>
     </div>
   );
