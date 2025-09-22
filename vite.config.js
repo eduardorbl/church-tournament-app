@@ -1,0 +1,14 @@
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+
+/**
+ * Vite configuration.  We register the React plugin so that JSX and TSX
+ * files are compiled correctly.  Vite automatically reads the `.env` file
+ * prefixed with VITE_ and exposes those variables to the client.
+ */
+export default defineConfig({
+  plugins: [react()],
+  build: {
+    outDir: 'dist',
+  },
+});
