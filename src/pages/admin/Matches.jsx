@@ -591,13 +591,13 @@ export default function Matches() {
       )}
 
       {/* Filtros */}
-      <div className="flex flex-wrap gap-3">
-        <div className="flex items-center gap-2">
+      <div className="flex flex-col gap-3 sm:flex-row sm:gap-6">
+        <div className="flex flex-col gap-2">
           <span className="text-sm font-medium">Modalidade:</span>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <button
               onClick={() => setSelectedSport(null)}
-              className={`px-3 py-1 rounded text-xs ${
+              className={`px-2 py-1 rounded text-xs ${
                 !selectedSport ? "bg-primary text-white" : "bg-gray-100 hover:bg-gray-200"
               }`}
             >
@@ -607,7 +607,7 @@ export default function Matches() {
               <button
                 key={s.id}
                 onClick={() => setSelectedSport(s.id)}
-                className={`px-3 py-1 rounded text-xs ${
+                className={`px-2 py-1 rounded text-xs ${
                   selectedSport === s.id ? "bg-primary text-white" : "bg-gray-100 hover:bg-gray-200"
                 }`}
               >
@@ -617,12 +617,12 @@ export default function Matches() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-col gap-2">
           <span className="text-sm font-medium">Status:</span>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <button
               onClick={() => setSelectedStatus(null)}
-              className={`px-3 py-1 rounded text-xs ${
+              className={`px-2 py-1 rounded text-xs ${
                 !selectedStatus ? "bg-primary text-white" : "bg-gray-100 hover:bg-gray-200"
               }`}
             >
@@ -632,7 +632,7 @@ export default function Matches() {
               <button
                 key={value}
                 onClick={() => setSelectedStatus(value)}
-                className={`px-3 py-1 rounded text-xs ${
+                className={`px-2 py-1 rounded text-xs ${
                   selectedStatus === value ? "bg-primary text-white" : "bg-gray-100 hover:bg-gray-200"
                 }`}
               >
@@ -673,16 +673,16 @@ export default function Matches() {
               : "border-gray-200";
 
             return (
-              <li key={m.id} className={`border rounded-lg p-4 flex flex-col gap-3 bg-white shadow-sm relative overflow-hidden ${cardBorder}`}>
+              <li key={m.id} className={`border rounded-lg p-3 sm:p-4 flex flex-col gap-3 bg-white shadow-sm relative overflow-hidden ${cardBorder}`}>
                 <LiveProgressBar status={m.status} />
                 
                 {/* Cabeçalho */}
-                <div className="flex items-center justify-between">
-                  <div className="text-xs text-gray-500 flex items-center gap-2">
+                <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="text-xs text-gray-500 flex flex-wrap items-center gap-1 sm:gap-2">
                     <span className="font-medium">{m.sport?.name}</span>
-                    {m.group_name ? ` · Grupo ${m.group_name}` : ""}
-                    {m.stage ? ` · ${m.stage}` : ""}
-                    {m.round ? ` · J${m.round}` : ""}
+                    {m.group_name && <span>· Grupo {m.group_name}</span>}
+                    {m.stage && <span>· {m.stage}</span>}
+                    {m.round && <span>· J{m.round}</span>}
                     {isLive && (
                       <span className="inline-flex items-center gap-1 text-[11px] font-medium text-gray-600">
                         🕐 {formatGameTime(m, currentTimestamp)}
@@ -690,7 +690,7 @@ export default function Matches() {
                     )}
                   </div>
                   <span
-                    className={`text-xs px-2 py-0.5 rounded ${
+                    className={`text-xs px-2 py-0.5 rounded self-start sm:self-auto ${
                       m.status === "ongoing"
                         ? "bg-green-100 text-green-700"
                         : m.status === "paused"
@@ -705,7 +705,7 @@ export default function Matches() {
                 </div>
 
                 {/* Linha dos times com placar e sets (para Vôlei) */}
-                <div className="grid grid-cols-2 gap-4 items-stretch">
+                <div className="space-y-3 sm:space-y-0 sm:grid sm:grid-cols-2 sm:gap-4">
                   <TeamDisplay
                     align="left"
                     team={m.home}
@@ -818,69 +818,77 @@ function TeamDisplay({
   align = "left",
 }) {
   const right = align === "right";
+  
   return (
-    <div className={`flex flex-col gap-3 border rounded p-3 ${right ? "items-end" : "items-start"}`}>
-      <div className={`flex items-center gap-2 w-full ${right ? "justify-end" : "justify-start"}`}>
-        <TeamBadge team={team || { name: "A definir" }} size={28} />
-        <span className="truncate">{team?.name || "A definir"}</span>
+    <div className={`border rounded p-3 space-y-3 ${right ? "" : ""}`}>
+      {/* Nome do time */}
+      <div className={`flex items-center gap-2 ${right ? "sm:justify-end" : ""}`}>
+        <TeamBadge team={team || { name: "A definir" }} size={24} />
+        <span className="text-sm font-medium truncate">{team?.name || "A definir"}</span>
       </div>
 
+      {/* Sets para vôlei */}
       {typeof sets === "number" && (
-        <div className={`flex items-center gap-3 ${right ? "justify-end" : ""}`}>
-          <span className="text-xs text-gray-600">Sets:</span>
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-gray-600">Sets:</span>
+            <span className="font-semibold text-sm tabular-nums">{sets}</span>
+          </div>
           <div className="flex items-center gap-1">
             <button
               onClick={onSetDec}
               disabled={disabled}
-              className="px-2 py-1 text-xs border rounded hover:bg-gray-100 disabled:opacity-50"
+              className="flex-1 px-2 py-1 text-xs border rounded hover:bg-gray-100 disabled:opacity-50"
             >
               -
             </button>
-            <span className="font-semibold w-6 text-center tabular-nums">{sets}</span>
             <button
               onClick={onSetInc}
               disabled={disabled}
-              className="px-2 py-1 text-xs border rounded hover:bg-gray-100 disabled:opacity-50"
+              className="flex-1 px-2 py-1 text-xs border rounded hover:bg-gray-100 disabled:opacity-50"
             >
               +
             </button>
             <button
               onClick={onSetReset}
               disabled={disabled}
-              className="px-2 py-1 text-xs bg-red-500 text-white rounded hover:bg-red-600 disabled:opacity-50 ml-6"
+              className="px-2 py-1 text-xs bg-red-500 text-white rounded hover:bg-red-600 disabled:opacity-50"
               title="Zerar sets"
             >
-              Zerar
+              0
             </button>
           </div>
         </div>
       )}
 
-      <div className={`flex items-center gap-3 ${right ? "justify-end" : ""}`}>
-        <span className="text-xs text-gray-600">Pontos:</span>
+      {/* Pontos */}
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-gray-600">Pontos:</span>
+          <span className="font-bold text-lg tabular-nums">{Number(score || 0)}</span>
+        </div>
         <div className="flex items-center gap-1">
           <button
             onClick={onDec}
             disabled={disabled}
-            className="px-2 py-1 text-xs border rounded hover:bg-gray-100 disabled:opacity-50"
+            className="flex-1 px-2 py-1 text-xs border rounded hover:bg-gray-100 disabled:opacity-50"
           >
             -
           </button>
-          <span className="font-bold text-lg w-8 text-center tabular-nums">{Number(score || 0)}</span>
           <button
             onClick={onInc}
             disabled={disabled}
-            className="px-2 py-1 text-xs border rounded hover:bg-gray-100 disabled:opacity-50"
+            className="flex-1 px-2 py-1 text-xs border rounded hover:bg-gray-100 disabled:opacity-50"
           >
             +
           </button>
           <button
             onClick={onReset}
             disabled={disabled}
-            className="px-2 py-1 text-xs bg-red-500 text-white rounded hover:bg-red-600 disabled:opacity-50 ml-6"
+            className="px-2 py-1 text-xs bg-red-500 text-white rounded hover:bg-red-600 disabled:opacity-50"
             title="Zerar pontos"
           >
-            Zerar
+            0
           </button>
         </div>
       </div>
