@@ -14,6 +14,8 @@ import TeamPage from "./pages/TeamPage";
 import Live from "./pages/Live";
 import Upcoming from "./pages/Upcoming";
 import MatchPage from "./pages/MatchPage"; 
+import SetPassword from "./pages/SetPassword";
+
 // Páginas admin
 import Admin from "./pages/Admin";
 import Login from "./components/Login";

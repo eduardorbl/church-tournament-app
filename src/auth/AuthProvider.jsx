@@ -1,4 +1,3 @@
-// src/auth/AuthProvider.jsx
 import { createContext, useContext, useEffect, useState } from 'react';
 import { supabase } from '../supabaseClient';
 
@@ -8,6 +7,7 @@ export function AuthProvider({ children }) {
   const [session, setSession] = useState(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [ready, setReady] = useState(false);
+  const [needsPasswordSetup, setNeedsPasswordSetup] = useState(false);
 
   useEffect(() => {
     let sub;
@@ -18,18 +18,33 @@ export function AuthProvider({ children }) {
 
       if (sess?.user?.id) {
         await refreshRole(sess.user.id);
+        
+        // Verifica se é um usuário que veio via invite/link mágico
+        if (!sess.user.user_metadata?.password_set) {
+          setNeedsPasswordSetup(true);
+        }
       } else {
         setIsAdmin(false);
       }
 
       setReady(true);
 
-      sub = supabase.auth.onAuthStateChange((_ev, newSession) => {
+      sub = supabase.auth.onAuthStateChange(async (event, newSession) => {
         setSession(newSession ?? null);
+        
         if (newSession?.user?.id) {
-          refreshRole(newSession.user.id);
+          await refreshRole(newSession.user.id);
+          
+          // Verifica eventos específicos que indicam primeiro login
+          if (event === 'SIGNED_IN' && !newSession.user.user_metadata?.password_set) {
+            setNeedsPasswordSetup(true);
+          }
         } else {
           setIsAdmin(false);
+        }
+        
+        if (event === 'SIGNED_OUT') {
+          setNeedsPasswordSetup(false);
         }
       }).data.subscription;
     };
@@ -49,10 +64,20 @@ export function AuthProvider({ children }) {
   const signOut = async () => {
     await supabase.auth.signOut();
     setIsAdmin(false);
+    setNeedsPasswordSetup(false);
   };
 
   return (
-    <AuthContext.Provider value={{ session, isAdmin, ready, signOut }}>
+    <AuthContext.Provider value={{ 
+      session, 
+      isAdmin, 
+      ready, 
+      signOut,
+      needsPasswordSetup,
+      setNeedsPasswordSetup,
+      user: session?.user ?? null,
+      loading: !ready
+    }}>
       {children}
     </AuthContext.Provider>
   );
