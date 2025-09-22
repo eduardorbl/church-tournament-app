@@ -310,12 +310,22 @@ export default function Matches() {
         setLastError("Somente administradores podem alterar partidas (RLS).");
         return false;
       }
-  
+
       // 🔧 Log para debug - vamos ver o que está sendo enviado
       console.log('🔄 Atualizando partida:', { id, patch });
-  
+      console.log('🔍 Tipo do ID:', typeof id, 'Valor:', id);
+
       // 🔧 Validação dos dados antes de enviar
       const validatedPatch = { ...patch };
+      
+      // 🔍 Log detalhado de cada campo do patch
+      Object.keys(validatedPatch).forEach(key => {
+        console.log(`🔍 Campo ${key}:`, {
+          valor: validatedPatch[key],
+          tipo: typeof validatedPatch[key],
+          isArray: Array.isArray(validatedPatch[key])
+        });
+      });
       
       // Se estamos atualizando meta, garantir que é um objeto
       if (validatedPatch.meta && typeof validatedPatch.meta !== 'object') {
@@ -323,32 +333,64 @@ export default function Matches() {
         setLastError('Erro interno: meta deve ser um objeto.');
         return false;
       }
-  
+
       // Garantir que scores são números ou null
       if ('home_score' in validatedPatch) {
+        const originalValue = validatedPatch.home_score;
         validatedPatch.home_score = validatedPatch.home_score === null ? null : Number(validatedPatch.home_score);
+        console.log(`🔍 home_score: ${originalValue} → ${validatedPatch.home_score} (${typeof validatedPatch.home_score})`);
       }
       if ('away_score' in validatedPatch) {
+        const originalValue = validatedPatch.away_score;
         validatedPatch.away_score = validatedPatch.away_score === null ? null : Number(validatedPatch.away_score);
+        console.log(`🔍 away_score: ${originalValue} → ${validatedPatch.away_score} (${typeof validatedPatch.away_score})`);
       }
-  
+
       // 🔧 Verificar se o ID da partida é válido
       if (!id || typeof id !== 'string') {
         console.error('ID da partida inválido:', id);
         setLastError('ID da partida inválido.');
         return false;
       }
-  
-      console.log('🔄 Patch validado:', validatedPatch);
-  
+
+      // 🔍 Verificar se é um UUID válido
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      if (!uuidRegex.test(id)) {
+        console.error('ID não é um UUID válido:', id);
+        setLastError('ID da partida não é um UUID válido.');
+        return false;
+      }
+
+      // 🔍 Verificar se não há UUIDs em campos que devem ser integers
+      const integerFields = ['home_score', 'away_score', 'sport_id', 'home_team_id', 'away_team_id'];
+      for (const field of integerFields) {
+        if (field in validatedPatch && validatedPatch[field] !== null) {
+          const value = validatedPatch[field];
+          if (typeof value === 'string' && uuidRegex.test(value)) {
+            console.error(`❌ Campo ${field} contém UUID mas deveria ser integer:`, value);
+            setLastError(`Erro: Campo ${field} contém UUID inválido.`);
+            return false;
+          }
+        }
+      }
+
+      console.log('🔄 Patch validado final:', validatedPatch);
+
       const { data, error } = await supabase
         .from("matches")
         .update(validatedPatch)
         .eq("id", id)
         .select("id"); // detecta RLS (se não puder selecionar, volta [])
-  
+
       if (error) {
         console.error("Update matches error:", error, { id, patch: validatedPatch });
+        console.error("🔍 Error details:", {
+          code: error.code,
+          message: error.message,
+          details: error.details,
+          hint: error.hint
+        });
+        
         const msg = [
           "Falha ao atualizar a partida.",
           error.code && `code: ${error.code}`,
@@ -369,12 +411,17 @@ export default function Matches() {
         setLastError(msg);
         return false;
       }
-  
+
       console.log('✅ Partida atualizada com sucesso:', data);
       if (after) await after();
       return true;
     } catch (e) {
       console.error("mutate exception:", e);
+      console.error("🔍 Exception details:", {
+        name: e.name,
+        message: e.message,
+        stack: e.stack
+      });
       setLastError(e.message || "Erro ao atualizar");
       return false;
     } finally {
