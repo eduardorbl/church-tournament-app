@@ -91,6 +91,13 @@ function formatGameTime(match, currentTimestamp) {
   return `${minutes}:${seconds.toString().padStart(2, '0')}`;
 }
 
+// Função para obter sets do vôlei
+function getSets(match, side) {
+  const meta = match.meta || {};
+  const key = side === "home" ? "home_sets" : "away_sets";
+  return Math.max(0, Number(meta[key] || 0));
+}
+
 // Barra animada para jogos ao vivo/pausados
 function LiveProgressBar({ status }) {
   if (status !== "ongoing" && status !== "paused") return null;
@@ -139,10 +146,17 @@ function MatchRow({ match, currentTimestamp }) {
   const home = match.home;
   const away = match.away;
 
+  // Verifica se é vôlei
+  const isVolei = (match.sport?.name || "").toLowerCase() === "volei";
+
   // Mostrar placar SOMENTE quando o jogo já iniciou (ongoing/paused) ou terminou (finished).
   const shouldShowScore = match.status !== "scheduled";
   const homeScore = typeof match.home_score === "number" ? match.home_score : 0;
   const awayScore = typeof match.away_score === "number" ? match.away_score : 0;
+
+  // Sets para vôlei
+  const homeSets = isVolei ? getSets(match, "home") : 0;
+  const awaySets = isVolei ? getSets(match, "away") : 0;
 
   const isLive = match.status === "ongoing" || match.status === "paused";
   const cardBorder = isLive 
@@ -199,9 +213,20 @@ function MatchRow({ match, currentTimestamp }) {
         {/* Placar */}
         <div className="shrink-0 text-center">
           {shouldShowScore ? (
-            <span className="font-bold text-lg tabular-nums">
-              {homeScore} <span className="text-gray-400">x</span> {awayScore}
-            </span>
+            <div className="space-y-1">
+              {/* Sets para vôlei */}
+              {isVolei && (
+                <div className="text-xs font-medium text-gray-600">
+                  <span className="tabular-nums">{homeSets}</span>
+                  <span className="text-gray-400 mx-1">sets</span>
+                  <span className="tabular-nums">{awaySets}</span>
+                </div>
+              )}
+              {/* Pontos */}
+              <div className="font-bold text-lg tabular-nums">
+                {homeScore} <span className="text-gray-400">x</span> {awayScore}
+              </div>
+            </div>
           ) : null}
           <div className="text-[10px] text-gray-400 uppercase tracking-wide">
             {match.stage || ""}
