@@ -39,6 +39,8 @@ export default function SetPassword() {
     }
 
     try {
+      console.log('Atualizando senha...');
+      
       // Atualiza a senha e marca que foi configurada
       const { error } = await supabase.auth.updateUser({ 
         password: pwd,
@@ -46,25 +48,25 @@ export default function SetPassword() {
       });
 
       if (error) {
+        console.error('Erro ao atualizar senha:', error);
         setErr(error.message || "Não foi possível atualizar a senha.");
         setSubmitting(false);
         return;
       }
       
+      console.log('Senha atualizada com sucesso');
       setMsg("Senha definida com sucesso!");
       setNeedsPasswordSetup(false);
       
-      // Verifica se é admin e redireciona
-      const { data: isAdmin } = await supabase.rpc('is_admin');
-      const redirectTo = isAdmin ? '/admin' : '/';
-      
+      // Redireciona direto para admin sem verificar RPC
       setTimeout(() => {
+        console.log('Redirecionando...');
         setSubmitting(false);
-        nav(redirectTo, { replace: true });
+        nav('/admin', { replace: true });
       }, 1000);
       
     } catch (error) {
-      console.error('Erro ao definir senha:', error);
+      console.error('Erro inesperado:', error);
       setErr("Erro inesperado. Tente novamente.");
       setSubmitting(false);
     }
