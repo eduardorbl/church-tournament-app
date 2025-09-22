@@ -507,13 +507,29 @@ function StandingsTable({ rows, teamsById }) {
 }
 
 /* ============================
-   Helper
+   Helper para garantir standings zeradas E recalcular quando necessário
    ============================ */
 const ensureInitialStandings = async (sportName) => {
   try {
-    await supabase.rpc("seed_initial_standings", { p_sport_name: sportName, p_reset: false });
+    await supabase.rpc("seed_initial_standings", {
+      p_sport_name: sportName,
+      p_reset: false,
+    });
   } catch (err) {
     console.warn("seed_initial_standings exception:", err);
+  }
+};
+
+// Nova função para forçar recálculo das standings
+const recalculateStandings = async (sportName) => {
+  try {
+    console.log('🔄 Recalculando standings para:', sportName);
+    await supabase.rpc("recalculate_standings", {
+      p_sport_name: sportName,
+    });
+    console.log('✅ Standings recalculadas com sucesso');
+  } catch (err) {
+    console.error("Erro ao recalcular standings:", err);
   }
 };
 
@@ -531,6 +547,9 @@ export default function Volei() {
   const channelRef = useRef(null);
   const timerRef = useRef(null);
   const koEnsuredRef = useRef(false);
+  
+  // Novo ref para detectar mudanças em partidas finalizadas
+  const finishedMatchesRef = useRef(new Map());
 
   const loadSportId = async () => {
     const { data } = await supabase.from("sports").select("id").eq("name", "Volei").maybeSingle();
@@ -654,6 +673,43 @@ export default function Volei() {
     setLoading(false);
   };
 
+  // Nova função para detectar mudanças em partidas finalizadas
+  const detectFinishedMatchChanges = (newMatches) => {
+    const currentFinished = new Map();
+    let hasChanges = false;
+
+    // Mapear partidas finalizadas atuais
+    newMatches
+      .filter(m => m.status === 'finished')
+      .forEach(m => {
+        const key = m.id;
+        // Para vôlei, incluir tanto o placar quanto os sets na chave
+        const scoreKey = `${m.home_score}-${m.away_score}_${m?.meta?.home_sets || 0}-${m?.meta?.away_sets || 0}`;
+        currentFinished.set(key, scoreKey);
+
+        // Verificar se houve mudança no placar ou sets
+        const oldScore = finishedMatchesRef.current.get(key);
+        if (oldScore && oldScore !== scoreKey) {
+          console.log(`🔄 Detectada mudança na partida ${m.id}: ${oldScore} → ${scoreKey}`);
+          hasChanges = true;
+        }
+      });
+
+    // Atualizar a referência
+    finishedMatchesRef.current = currentFinished;
+
+    // Se houve mudanças, recalcular standings
+    if (hasChanges) {
+      console.log('🔄 Mudanças detectadas em partidas finalizadas, recalculando standings...');
+      recalculateStandings("Volei").then(() => {
+        // Recarregar standings após recálculo
+        if (sportId) {
+          loadStandings(sportId);
+        }
+      });
+    }
+  };
+
   useEffect(() => {
     loadSportId();
   }, []);
@@ -667,6 +723,7 @@ export default function Volei() {
       setCurrentTimestamp(Date.now());
     }, 1000);
 
+    // Realtime: eventos e mudanças de partidas
     if (channelRef.current) {
       supabase.removeChannel(channelRef.current);
       channelRef.current = null;
@@ -674,8 +731,30 @@ export default function Volei() {
 
     const channel = supabase
       .channel("volei-live")
-      .on("postgres_changes", { event: "*", schema: "public", table: "match_events" }, () => loadStandings(sportId))
-      .on("postgres_changes", { event: "*", schema: "public", table: "matches" }, () => loadAll(sportId))
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "match_events" },
+        () => {
+          console.log('📡 Match events changed, reloading standings...');
+          loadStandings(sportId);
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "matches" },
+        (payload) => {
+          console.log('📡 Matches changed:', payload);
+          loadAll(sportId);
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "standings" },
+        () => {
+          console.log('📡 Standings changed, reloading...');
+          loadStandings(sportId);
+        }
+      )
       .subscribe();
 
     channelRef.current = channel;
@@ -686,6 +765,13 @@ export default function Volei() {
       channelRef.current = null;
     };
   }, [sportId]);
+
+  // Detectar mudanças em partidas finalizadas sempre que matches mudar
+  useEffect(() => {
+    if (matches.length > 0) {
+      detectFinishedMatchChanges(matches);
+    }
+  }, [matches]);
 
   // ======= apuração específica do vôlei =======
   const agg = useMemo(() => computeVolleyAgg(matches), [matches]);
@@ -774,7 +860,7 @@ export default function Volei() {
       });
     } else if (provisionalSemis?.semi1) {
       cards.push({
-        title: "Semifinal 1 (provisória)",
+        title: "Semifinal 1 (provisória) — Venc. Grupo A × Venc. Grupo B",
         home: provisionalSemis.semi1.home,
         away: provisionalSemis.semi1.away,
         badge: "Provisório",
@@ -790,7 +876,7 @@ export default function Volei() {
       });
     } else if (provisionalSemis?.semi2) {
       cards.push({
-        title: "Semifinal 2 (provisória)",
+        title: "Semifinal 2 (provisória) — Venc. Grupo C × Melhor 2º",
         home: provisionalSemis.semi2.home,
         away: provisionalSemis.semi2.away,
         badge: "Provisório",
@@ -885,6 +971,21 @@ export default function Volei() {
         </div>
       ) : (
         <>
+          {/* Botão manual para recalcular standings (para debug/admin) */}
+          {process.env.NODE_ENV === 'development' && (
+            <div className="border-2 border-dashed border-orange-200 p-3 rounded">
+              <p className="text-xs text-orange-600 mb-2">
+                🛠️ Modo desenvolvimento - Ferramentas de debug:
+              </p>
+              <button
+                onClick={() => recalculateStandings("Volei").then(() => loadStandings(sportId))}
+                className="text-xs bg-orange-100 text-orange-700 px-2 py-1 rounded hover:bg-orange-200"
+              >
+                🔄 Recalcular standings manualmente
+              </button>
+            </div>
+          )}
+
           {/* Partidas */}
           <section className="space-y-6">
             <h3 className="text-lg font-bold">Partidas</h3>

@@ -439,7 +439,7 @@ function StandingsTable({ standings, teamsById }) {
 }
 
 /* ============================
-   Helper: garantir standings
+   Helper: garantir standings E recalcular quando necessário
    ============================ */
 
 const ensureInitialStandings = async (sportName) => {
@@ -450,6 +450,19 @@ const ensureInitialStandings = async (sportName) => {
     });
   } catch (err) {
     console.warn("seed_initial_standings exception:", err);
+  }
+};
+
+// Nova função para forçar recálculo das standings
+const recalculateStandings = async (sportName) => {
+  try {
+    console.log('🔄 Recalculando standings para:', sportName);
+    await supabase.rpc("recalculate_standings", {
+      p_sport_name: sportName,
+    });
+    console.log('✅ Standings recalculadas com sucesso');
+  } catch (err) {
+    console.error("Erro ao recalcular standings:", err);
   }
 };
 
@@ -467,6 +480,9 @@ export default function Pebolim() {
   const channelRef = useRef(null);
   const timerRef = useRef(null);
   const koEnsuredRef = useRef(false); // evita chamar RPC em loop
+  
+  // Novo ref para detectar mudanças em partidas finalizadas
+  const finishedMatchesRef = useRef(new Map());
 
   // ID do esporte
   const loadSportId = async () => {
@@ -611,6 +627,42 @@ export default function Pebolim() {
     setLoading(false);
   };
 
+  // Nova função para detectar mudanças em partidas finalizadas
+  const detectFinishedMatchChanges = (newMatches) => {
+    const currentFinished = new Map();
+    let hasChanges = false;
+
+    // Mapear partidas finalizadas atuais
+    newMatches
+      .filter(m => m.status === 'finished')
+      .forEach(m => {
+        const key = m.id;
+        const scoreKey = `${m.home_score}-${m.away_score}`;
+        currentFinished.set(key, scoreKey);
+
+        // Verificar se houve mudança no placar
+        const oldScore = finishedMatchesRef.current.get(key);
+        if (oldScore && oldScore !== scoreKey) {
+          console.log(`🔄 Detectada mudança no placar da partida ${m.id}: ${oldScore} → ${scoreKey}`);
+          hasChanges = true;
+        }
+      });
+
+    // Atualizar a referência
+    finishedMatchesRef.current = currentFinished;
+
+    // Se houve mudanças, recalcular standings
+    if (hasChanges) {
+      console.log('🔄 Mudanças detectadas em partidas finalizadas, recalculando standings...');
+      recalculateStandings("Pebolim").then(() => {
+        // Recarregar standings após recálculo
+        if (sportId) {
+          loadStandings(sportId);
+        }
+      });
+    }
+  };
+
   // Efeitos
   useEffect(() => {
     loadSportId();
@@ -625,7 +677,7 @@ export default function Pebolim() {
       setCurrentTimestamp(Date.now());
     }, 1000);
 
-    // realtime
+    // Realtime: eventos e mudanças de partidas
     if (channelRef.current) {
       supabase.removeChannel(channelRef.current);
       channelRef.current = null;
@@ -636,12 +688,26 @@ export default function Pebolim() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "match_events" },
-        () => loadStandings(sportId)
+        () => {
+          console.log('📡 Match events changed, reloading standings...');
+          loadStandings(sportId);
+        }
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "matches" },
-        () => loadAll(sportId)
+        (payload) => {
+          console.log('📡 Matches changed:', payload);
+          loadAll(sportId);
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "standings" },
+        () => {
+          console.log('📡 Standings changed, reloading...');
+          loadStandings(sportId);
+        }
       )
       .subscribe();
 
@@ -653,6 +719,13 @@ export default function Pebolim() {
       channelRef.current = null;
     };
   }, [sportId]);
+
+  // Detectar mudanças em partidas finalizadas sempre que matches mudar
+  useEffect(() => {
+    if (matches.length > 0) {
+      detectFinishedMatchChanges(matches);
+    }
+  }, [matches]);
 
   // ======= Derivados =======
 
@@ -838,6 +911,21 @@ export default function Pebolim() {
         </div>
       ) : (
         <>
+          {/* Botão manual para recalcular standings (para debug/admin) */}
+          {process.env.NODE_ENV === 'development' && (
+            <div className="border-2 border-dashed border-orange-200 p-3 rounded">
+              <p className="text-xs text-orange-600 mb-2">
+                🛠️ Modo desenvolvimento - Ferramentas de debug:
+              </p>
+              <button
+                onClick={() => recalculateStandings("Pebolim").then(() => loadStandings(sportId))}
+                className="text-xs bg-orange-100 text-orange-700 px-2 py-1 rounded hover:bg-orange-200"
+              >
+                🔄 Recalcular standings manualmente
+              </button>
+            </div>
+          )}
+
           {/* Partidas */}
           <section className="space-y-6">
             <h3 className="text-lg font-bold">Partidas</h3>
