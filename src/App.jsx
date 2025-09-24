@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useEffect, Suspense } from "react";
 import { Routes, Route, Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "./auth/AuthProvider";
 import RequireAdmin from "./components/RequireAdmin";
@@ -28,7 +28,34 @@ import VoleiTournament from "./pages/admin/VoleiTournament";
 import FIFATournament from "./pages/admin/FIFATournament";
 import PebolimTournament from "./pages/admin/PebolimTournament";
 
-// Componente para páginas não encontradas
+// ✅ COMPONENTE DE LOADING OTIMIZADO
+function LoadingScreen({ message = "Carregando aplicação..." }) {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50">
+      <div className="text-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
+        <p className="text-gray-600 animate-pulse">{message}</p>
+        <div className="mt-2 text-xs text-gray-400">
+          Aguarde um momento...
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ✅ LOADING PARA LAZY LOADING
+function LazyLoadingFallback() {
+  return (
+    <div className="flex items-center justify-center py-12">
+      <div className="text-center">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
+        <p className="text-gray-600">Carregando página...</p>
+      </div>
+    </div>
+  );
+}
+
+// ✅ COMPONENTE 404 OTIMIZADO
 function NotFound() {
   const navigate = useNavigate();
   
@@ -61,35 +88,13 @@ function NotFound() {
   );
 }
 
-// Componente de loading para transições suaves
-function LoadingFallback() {
-  return (
-    <div className="flex items-center justify-center py-12">
-      <div className="text-center">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary mx-auto mb-4"></div>
-        <p className="text-gray-600">Carregando...</p>
-      </div>
-    </div>
-  );
-}
-
-// Componente wrapper para navegação segura
-function SafeNavLink({ to, children, className, onClick, ...props }) {
-  const navigate = useNavigate();
-  
-  const handleClick = (e) => {
-    e.preventDefault();
-    if (onClick) onClick(e);
-    
-    // Usar replace para evitar problemas de histórico
-    navigate(to, { replace: false });
-  };
-  
+// ✅ LINK DE NAVEGAÇÃO OTIMIZADO
+function SafeNavLink({ to, children, className, onClick, isActive, ...props }) {
   return (
     <Link 
       to={to} 
-      className={className} 
-      onClick={handleClick}
+      className={`${className} ${isActive ? 'font-semibold' : ''} hover:underline transition-colors`}
+      onClick={onClick}
       {...props}
     >
       {children}
@@ -98,129 +103,149 @@ function SafeNavLink({ to, children, className, onClick, ...props }) {
 }
 
 export default function App() {
-  const { session, isAdmin, ready, signOut, needsPasswordSetup, loading } = useAuth();
+  const { 
+    session, 
+    isAdmin, 
+    ready, 
+    loading, 
+    initializing,
+    needsPasswordSetup, 
+    signOut 
+  } = useAuth();
+  
   const location = useLocation();
   const navigate = useNavigate();
 
-  // Debug: log mudanças de rota
+  // ✅ DEBUG - LOG MUDANÇAS DE ROTA
   useEffect(() => {
-    console.log('Route changed to:', location.pathname);
+    console.log('📍 Route changed to:', location.pathname);
   }, [location.pathname]);
 
-  // Loading state enquanto a autenticação está sendo verificada
-  if (!ready || loading) {
-    return <LoadingFallback />;
+  // ✅ ESTADOS DE LOADING HIERÁRQUICOS
+  // 1. Inicialização (primeira verificação)
+  if (initializing) {
+    return <LoadingScreen message="Inicializando aplicação..." />;
   }
 
-  // Se o usuário precisa definir senha, sempre mostra essa tela
+  // 2. Loading geral (operações em andamento)
+  if (loading) {
+    return <LoadingScreen message="Carregando..." />;
+  }
+
+  // 3. Aguardando auth ficar pronto
+  if (!ready) {
+    return <LoadingScreen message="Verificando autenticação..." />;
+  }
+
+  // ✅ CONFIGURAÇÃO DE SENHA TEM PRIORIDADE MÁXIMA
   if (needsPasswordSetup) {
     return (
       <ErrorBoundary>
         <RouterGuard>
-          <SetPassword />
+          <div className="min-h-screen bg-gray-50">
+            <SetPassword />
+          </div>
         </RouterGuard>
       </ErrorBoundary>
     );
   }
 
-  // Função para logout seguro
+  // ✅ LOGOUT SEGURO
   const handleSignOut = async () => {
     try {
       await signOut();
       navigate('/', { replace: true });
     } catch (error) {
-      console.error('Error during signout:', error);
+      console.error('Erro durante logout:', error);
+      // Em caso de erro, força navegação para home
+      navigate('/', { replace: true });
     }
   };
 
   return (
     <ErrorBoundary>
       <RouterGuard>
-        <div className="min-h-screen flex flex-col">
-          {/* HEADER */}
+        <div className="min-h-screen flex flex-col bg-gray-50">
+          {/* ✅ HEADER OTIMIZADO */}
           <header className="bg-primary text-white p-4 sticky top-0 z-50 shadow-md">
             <div className="container mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
-              <SafeNavLink to="/" className="text-xl font-bold hover:opacity-90 transition-opacity">
+              <SafeNavLink 
+                to="/" 
+                className="text-xl font-bold hover:opacity-90 transition-opacity"
+                isActive={false}
+              >
                 Copa Influence 🏆
               </SafeNavLink>
 
+              {/* ✅ NAVEGAÇÃO PRINCIPAL */}
               <nav className="flex flex-wrap items-center gap-3 text-sm">
                 <SafeNavLink 
                   to="/" 
-                  className={`hover:underline transition-colors ${
-                    location.pathname === '/' ? 'font-semibold' : ''
-                  }`}
+                  isActive={location.pathname === '/'}
                 >
                   Home
                 </SafeNavLink>
                 <SafeNavLink 
                   to="/futsal" 
-                  className={`hover:underline transition-colors ${
-                    location.pathname === '/futsal' ? 'font-semibold' : ''
-                  }`}
+                  isActive={location.pathname === '/futsal'}
                 >
                   Futsal
                 </SafeNavLink>
                 <SafeNavLink 
                   to="/volei" 
-                  className={`hover:underline transition-colors ${
-                    location.pathname === '/volei' ? 'font-semibold' : ''
-                  }`}
+                  isActive={location.pathname === '/volei'}
                 >
                   Vôlei
                 </SafeNavLink>
                 <SafeNavLink 
                   to="/fifa" 
-                  className={`hover:underline transition-colors ${
-                    location.pathname === '/fifa' ? 'font-semibold' : ''
-                  }`}
+                  isActive={location.pathname === '/fifa'}
                 >
                   FIFA
                 </SafeNavLink>
                 <SafeNavLink 
                   to="/pebolim" 
-                  className={`hover:underline transition-colors ${
-                    location.pathname === '/pebolim' ? 'font-semibold' : ''
-                  }`}
+                  isActive={location.pathname === '/pebolim'}
                 >
                   Pebolim
                 </SafeNavLink>
                 <SafeNavLink 
                   to="/ao-vivo" 
-                  className={`hover:underline transition-colors ${
-                    location.pathname === '/ao-vivo' ? 'font-semibold' : ''
-                  }`}
+                  isActive={location.pathname === '/ao-vivo'}
                 >
                   Ao vivo
                 </SafeNavLink>
                 <SafeNavLink 
                   to="/proximos" 
-                  className={`hover:underline transition-colors ${
-                    location.pathname === '/proximos' ? 'font-semibold' : ''
-                  }`}
+                  isActive={location.pathname === '/proximos'}
                 >
                   Próximos
                 </SafeNavLink>
 
-                {/* Link admin só se logado e admin */}
-                {ready && isAdmin && (
+                {/* ✅ LINK ADMIN CONDICIONAL */}
+                {isAdmin && (
                   <SafeNavLink
                     to="/admin"
-                    className={`ml-2 inline-block bg-white/15 hover:bg-white/25 transition-colors px-3 py-1 rounded ${
-                      location.pathname.startsWith('/admin') ? 'bg-white/25 font-semibold' : ''
-                    }`}
+                    className="ml-2 inline-block bg-white/15 hover:bg-white/25 transition-colors px-3 py-1 rounded"
+                    isActive={location.pathname.startsWith('/admin')}
                   >
                     Administrador
                   </SafeNavLink>
                 )}
               </nav>
 
+              {/* ✅ ÁREA DE USUÁRIO */}
               <div className="text-sm">
                 {session ? (
                   <div className="flex items-center gap-3">
                     {session.user?.email && (
-                      <span className="text-white/80 text-xs">
+                      <span className="text-white/80 text-xs truncate max-w-32">
                         {session.user.email}
+                      </span>
+                    )}
+                    {isAdmin && (
+                      <span className="text-xs bg-white/20 px-2 py-1 rounded">
+                        Admin
                       </span>
                     )}
                     <button 
@@ -233,7 +258,8 @@ export default function App() {
                 ) : (
                   <SafeNavLink 
                     to="/login" 
-                    className="hover:underline transition-colors hover:text-white/80"
+                    className="hover:text-white/80"
+                    isActive={false}
                   >
                     Entrar
                   </SafeNavLink>
@@ -242,11 +268,11 @@ export default function App() {
             </div>
           </header>
 
-          {/* MAIN */}
+          {/* ✅ MAIN CONTENT */}
           <main className="flex-1 container mx-auto p-4">
-            <React.Suspense fallback={<LoadingFallback />}>
+            <Suspense fallback={<LazyLoadingFallback />}>
               <Routes>
-                {/* Rotas públicas */}
+                {/* ✅ ROTAS PÚBLICAS */}
                 <Route path="/" element={<Home />} />
                 <Route path="/futsal" element={<Futsal />} />
                 <Route path="/volei" element={<Volei />} />
@@ -255,30 +281,44 @@ export default function App() {
                 <Route path="/ao-vivo" element={<Live />} />
                 <Route path="/proximos" element={<Upcoming />} />
 
-                {/* TeamPage - aceitar ambos padrões */}
+                {/* ✅ PÁGINAS DE DETALHES */}
                 <Route path="/team/:id" element={<TeamPage />} />
                 <Route path="/times/:id" element={<TeamPage />} />
-
-                {/* MatchPage - aceitar ambos padrões */}
                 <Route path="/match/:id" element={<MatchPage />} />
                 <Route path="/partida/:id" element={<MatchPage />} />
 
-                {/* Rota para definir senha */}
+                {/* ✅ CONFIGURAÇÃO DE SENHA */}
                 <Route path="/set-password" element={<SetPassword />} />
 
-                {/* Login - só mostra se não estiver logado */}
+                {/* ✅ LOGIN INTELIGENTE */}
                 <Route 
                   path="/login" 
                   element={
                     session ? (
                       <div className="text-center py-8">
-                        <p className="text-gray-600 mb-4">Você já está logado.</p>
-                        <SafeNavLink 
-                          to={isAdmin ? "/admin" : "/"} 
-                          className="bg-primary text-white px-4 py-2 rounded hover:bg-primary/90"
-                        >
-                          {isAdmin ? "Ir para Admin" : "Voltar ao Início"}
-                        </SafeNavLink>
+                        <div className="max-w-md mx-auto">
+                          <h2 className="text-2xl font-bold text-gray-900 mb-4">
+                            Você já está logado
+                          </h2>
+                          <p className="text-gray-600 mb-6">
+                            Bem-vindo de volta, {session.user?.email}!
+                          </p>
+                          <div className="space-y-3">
+                            <SafeNavLink 
+                              to={isAdmin ? "/admin" : "/"} 
+                              className="block bg-primary text-white px-6 py-2 rounded-lg hover:bg-primary/90 transition-colors"
+                              isActive={false}
+                            >
+                              {isAdmin ? "Ir para Administração" : "Voltar ao Início"}
+                            </SafeNavLink>
+                            <button
+                              onClick={handleSignOut}
+                              className="block w-full bg-gray-500 text-white px-6 py-2 rounded-lg hover:bg-gray-600 transition-colors"
+                            >
+                              Trocar de conta
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     ) : (
                       <Login />
@@ -286,81 +326,23 @@ export default function App() {
                   } 
                 />
 
-                {/* Rotas admin protegidas */}
-                <Route
-                  path="/admin"
-                  element={
-                    <RequireAdmin>
-                      <Admin />
-                    </RequireAdmin>
-                  }
-                />
-                <Route
-                  path="/admin/elencos"
-                  element={
-                    <RequireAdmin>
-                      <AdminRosters />
-                    </RequireAdmin>
-                  }
-                />
-                <Route
-                  path="/admin/partidas"
-                  element={
-                    <RequireAdmin>
-                      <AdminMatches />
-                    </RequireAdmin>
-                  }
-                />
-                <Route
-                  path="/admin/campeonatos"
-                  element={
-                    <RequireAdmin>
-                      <AdminTournaments />
-                    </RequireAdmin>
-                  }
-                />
+                {/* ✅ ROTAS ADMIN PROTEGIDAS */}
+                <Route path="/admin" element={<RequireAdmin><Admin /></RequireAdmin>} />
+                <Route path="/admin/elencos" element={<RequireAdmin><AdminRosters /></RequireAdmin>} />
+                <Route path="/admin/partidas" element={<RequireAdmin><AdminMatches /></RequireAdmin>} />
+                <Route path="/admin/campeonatos" element={<RequireAdmin><AdminTournaments /></RequireAdmin>} />
+                <Route path="/admin/campeonatos/futsal" element={<RequireAdmin><FutsalTournament /></RequireAdmin>} />
+                <Route path="/admin/campeonatos/volei" element={<RequireAdmin><VoleiTournament /></RequireAdmin>} />
+                <Route path="/admin/campeonatos/fifa" element={<RequireAdmin><FIFATournament /></RequireAdmin>} />
+                <Route path="/admin/campeonatos/pebolim" element={<RequireAdmin><PebolimTournament /></RequireAdmin>} />
 
-                {/* Campeonatos específicos */}
-                <Route
-                  path="/admin/campeonatos/futsal"
-                  element={
-                    <RequireAdmin>
-                      <FutsalTournament />
-                    </RequireAdmin>
-                  }
-                />
-                <Route
-                  path="/admin/campeonatos/volei"
-                  element={
-                    <RequireAdmin>
-                      <VoleiTournament />
-                    </RequireAdmin>
-                  }
-                />
-                <Route
-                  path="/admin/campeonatos/fifa"
-                  element={
-                    <RequireAdmin>
-                      <FIFATournament />
-                    </RequireAdmin>
-                  }
-                />
-                <Route
-                  path="/admin/campeonatos/pebolim"
-                  element={
-                    <RequireAdmin>
-                      <PebolimTournament />
-                    </RequireAdmin>
-                  }
-                />
-
-                {/* Catch-all route para páginas não encontradas */}
+                {/* ✅ 404 */}
                 <Route path="*" element={<NotFound />} />
               </Routes>
-            </React.Suspense>
+            </Suspense>
           </main>
 
-          {/* FOOTER */}
+          {/* ✅ FOOTER */}
           <footer className="bg-gray-200 p-4 text-center text-xs text-gray-700 mt-auto">
             <div className="container mx-auto">
               <p>&copy; {new Date().getFullYear()} Copa Influence</p>

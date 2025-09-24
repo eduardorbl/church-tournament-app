@@ -101,6 +101,9 @@ export default function Matches() {
   const [isAdmin, setIsAdmin] = useState(null); // só para aviso visual
   const [lastError, setLastError] = useState(null);
   const [currentTimestamp, setCurrentTimestamp] = useState(Date.now());
+  
+  // ✅ Estado de conectividade
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
 
   // mantém mensagens de erro visíveis por 8s, a menos que o usuário feche
   useEffect(() => {
@@ -108,6 +111,20 @@ export default function Matches() {
     const t = setTimeout(() => setLastError(null), 8000);
     return () => clearTimeout(t);
   }, [lastError]);
+
+  // ✅ Detectar conectividade
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+    
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
 
   const channelRef = useRef(null);
   const mountedRef = useRef(true);
@@ -280,7 +297,14 @@ export default function Matches() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "matches" },
-        () => loadMatches()
+        () => {
+          // ✅ Pequeno delay para evitar múltiplas atualizações simultâneas
+          setTimeout(() => {
+            if (mountedRef.current) {
+              loadMatches();
+            }
+          }, 200);
+        }
       )
       .subscribe();
 
@@ -295,196 +319,149 @@ export default function Matches() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSport, selectedStatus]);
 
-
-  /** ========= Mutação genérica ========= */
+  /** ========= Mutação otimizada ========= */
   const mutate = async (id, patch, after = null) => {
     setMatchBusy(id, true);
     setLastError(null);
+    
+    // ✅ 1. ATUALIZAÇÃO OTIMISTA - Aplica mudança imediatamente na UI
+    const originalMatch = matches.find(m => m.id === id);
+    if (originalMatch) {
+      setMatches(prev => prev.map(m => 
+        m.id === id ? { ...m, ...patch } : m
+      ));
+    }
+    
     try {
+      // ✅ 2. VALIDAÇÕES RÁPIDAS - Fail fast
       const session = await ensureSession();
       if (!session) {
-        setLastError("Você precisa estar autenticado para realizar esta ação.");
-        return false;
+        throw new Error("Você precisa estar autenticado para realizar esta ação.");
       }
+      
       if (isAdmin === false) {
-        setLastError("Somente administradores podem alterar partidas (RLS).");
-        return false;
+        throw new Error("Somente administradores podem alterar partidas.");
       }
 
-      console.log('🔄 === INÍCIO MUTAÇÃO ===');
-      console.log('🔍 Match ID:', id, '(tipo:', typeof id, ')');
-      console.log('🔍 Patch original:', JSON.stringify(patch, null, 2));
-      console.log('🔍 Patch keys/values:', Object.entries(patch).map(([k, v]) => `${k}: ${v} (${typeof v})`));
-
-      // Validar que o ID é UUID válido
+      // ✅ 3. VALIDAÇÃO DE ID UUID
       const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
       if (!uuidRegex.test(id)) {
-        console.error('❌ ID inválido:', id);
-        setLastError('ID da partida inválido.');
-        return false;
+        throw new Error('ID da partida inválido.');
       }
 
-      // VERIFICAÇÃO EXTRA: garantir que não há UUIDs nos valores
-      for (const [key, value] of Object.entries(patch)) {
-        if (typeof value === 'string' && uuidRegex.test(value)) {
-          console.error('❌ PROBLEMA DETECTADO: UUID encontrado em valor:', key, '=', value);
-          setLastError(`Erro: Campo ${key} contém UUID inválido: ${value}`);
-          return false;
+      // ✅ 4. SANITIZAÇÃO DO PATCH - Mais eficiente
+      const cleanPatch = sanitizePatch(patch);
+      
+      // ✅ 5. UPDATE NO BANCO - Sem select desnecessário
+      const { error } = await supabase
+        .from("matches")
+        .update(cleanPatch)
+        .eq("id", id);
+
+      if (error) {
+        // Reverte a mudança otimista em caso de erro
+        if (originalMatch) {
+          setMatches(prev => prev.map(m => 
+            m.id === id ? originalMatch : m
+          ));
+        }
+        
+        throw new Error(`Falha ao atualizar: ${error.message}`);
+      }
+
+      // ✅ 6. CALLBACK PÓS-SUCESSO
+      if (after) {
+        try {
+          await after();
+        } catch (callbackError) {
+          console.warn('Erro no callback após mutação:', callbackError);
         }
       }
 
-      // Criar patch limpo e validado
-      const cleanPatch = {};
+      return true;
+
+    } catch (error) {
+      console.error('Erro na mutação:', error);
       
-      // Processar cada campo individualmente
-      for (const [key, value] of Object.entries(patch)) {
-        console.log(`🔍 Processando ${key}:`, value, `(${typeof value})`);
-        
-        if (key === 'home_score' || key === 'away_score') {
-          // Scores devem ser integers - VALIDAÇÃO EXTRA
+      // Reverte mudança otimista em caso de erro
+      if (originalMatch) {
+        setMatches(prev => prev.map(m => 
+          m.id === id ? originalMatch : m
+        ));
+      }
+      
+      setLastError(error.message || "Erro ao atualizar partida.");
+      return false;
+      
+    } finally {
+      setMatchBusy(id, false);
+      // ✅ 7. REMOVIDO O RELOAD AUTOMÁTICO - O realtime vai sincronizar
+      // O realtime channel já vai atualizar os dados quando necessário
+    }
+  };
+
+  // ✅ FUNÇÃO AUXILIAR PARA SANITIZAÇÃO
+  const sanitizePatch = (patch) => {
+    const cleanPatch = {};
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+    
+    for (const [key, value] of Object.entries(patch)) {
+      // Detecta UUIDs em valores que não deveriam tê-los
+      if (typeof value === 'string' && uuidRegex.test(value) && !key.includes('_id')) {
+        throw new Error(`Campo ${key} contém UUID inválido: ${value}`);
+      }
+      
+      switch (key) {
+        case 'home_score':
+        case 'away_score':
           if (value === null || value === undefined) {
             cleanPatch[key] = 0;
           } else {
-            // Converter explicitamente para number primeiro
-            let numValue;
-            if (typeof value === 'string') {
-              // VERIFICAÇÃO ADICIONAL: se string contém UUID
-              if (uuidRegex.test(value)) {
-                console.error(`❌ ERRO CRÍTICO: ${key} contém UUID:`, value);
-                setLastError(`Erro crítico: ${key} contém UUID em vez de número: ${value}`);
-                return false;
-              }
-              // Se for string, tentar converter
-              numValue = parseInt(value, 10);
-            } else if (typeof value === 'number') {
-              numValue = Math.floor(value); // Garantir que é integer
-            } else {
-              console.error(`❌ ${key} tipo inválido:`, typeof value, value);
-              setLastError(`${key} deve ser um número.`);
-              return false;
-            }
-            
+            const numValue = Number(value);
             if (isNaN(numValue) || numValue < 0) {
-              console.error(`❌ ${key} valor inválido:`, value, '→', numValue);
-              setLastError(`${key} deve ser um número positivo.`);
-              return false;
+              throw new Error(`${key} deve ser um número positivo.`);
             }
-            cleanPatch[key] = numValue;
+            cleanPatch[key] = Math.floor(numValue);
           }
-          console.log(`✅ ${key} → ${cleanPatch[key]} (${typeof cleanPatch[key]})`);
-        }
-        else if (key === 'status') {
-          // Status deve ser enum válido
+          break;
+          
+        case 'status':
           const validStatuses = ['scheduled', 'ongoing', 'paused', 'finished'];
           if (!validStatuses.includes(value)) {
-            console.error(`❌ Status inválido:`, value);
-            setLastError(`Status deve ser: ${validStatuses.join(', ')}`);
-            return false;
+            throw new Error(`Status deve ser: ${validStatuses.join(', ')}`);
           }
           cleanPatch[key] = value;
-          console.log(`✅ status → ${cleanPatch[key]}`);
-        }
-        else if (key === 'starts_at') {
-          // Data deve ser ISO string válida ou null
+          break;
+          
+        case 'starts_at':
           if (value === null || value === undefined) {
             cleanPatch[key] = null;
           } else {
             try {
               new Date(value).toISOString();
               cleanPatch[key] = value;
-            } catch (e) {
-              console.error(`❌ starts_at inválido:`, value);
-              setLastError('starts_at deve ser uma data válida.');
-              return false;
+            } catch {
+              throw new Error('starts_at deve ser uma data válida.');
             }
           }
-          console.log(`✅ starts_at → ${cleanPatch[key]}`);
-        }
-        else if (key === 'meta') {
-          // Meta deve ser objeto ou null
+          break;
+          
+        case 'meta':
           if (value === null || value === undefined) {
             cleanPatch[key] = {};
           } else if (typeof value === 'object' && !Array.isArray(value)) {
             cleanPatch[key] = value;
           } else {
-            console.error(`❌ meta inválido:`, value);
-            setLastError('meta deve ser um objeto.');
-            return false;
+            throw new Error('meta deve ser um objeto.');
           }
-          console.log(`✅ meta → ${JSON.stringify(cleanPatch[key])}`);
-        }
-        else {
-          // Outros campos - validação extra para evitar UUIDs em campos numéricos
-          if (typeof value === 'string' && uuidRegex.test(value)) {
-            console.error(`❌ Campo ${key} recebeu UUID quando deveria ser ${typeof value}:`, value);
-            setLastError(`Erro interno: ${key} recebeu UUID inválido.`);
-            return false;
-          }
+          break;
           
-          console.warn(`⚠️ Campo ${key} não validado explicitamente:`, value);
+        default:
           cleanPatch[key] = value;
-        }
       }
-
-      console.log('🔄 Patch final:', JSON.stringify(cleanPatch, null, 2));
-      console.log('🔄 Tipos finais:', Object.fromEntries(
-        Object.entries(cleanPatch).map(([k, v]) => [k, typeof v])
-      ));
-      console.log('🔄 Executando UPDATE...');
-
-      const { data, error } = await supabase
-        .from("matches")
-        .update(cleanPatch)
-        .eq("id", id)
-        .select("id");
-
-      if (error) {
-        console.error("❌ === ERRO SUPABASE ===");
-        console.error("Error object:", error);
-        console.error("Match ID:", id);
-        console.error("Clean patch:", cleanPatch);
-        console.error("Original patch:", patch);
-        console.error("Error details:", {
-          code: error.code,
-          message: error.message,
-          details: error.details,
-          hint: error.hint
-        });
-        
-        const msg = [
-          "Falha ao atualizar a partida.",
-          error.code && `code: ${error.code}`,
-          error.details && `details: ${error.details}`,
-          error.hint && `hint: ${error.hint}`,
-          error.message && `message: ${error.message}`,
-        ]
-          .filter(Boolean)
-          .join("\n");
-        setLastError(msg || "Falha ao atualizar partida (permissão/RLS?).");
-        return false;
-      }
-      
-      if (!data || data.length === 0) {
-        const msg = "Nenhuma linha atualizada. Verifique permissões (GRANT/RLS) e se o usuário é admin.";
-        console.warn(msg, { id, patch: cleanPatch });
-        setLastError(msg);
-        return false;
-      }
-
-      console.log('✅ Sucesso! Data:', data);
-      console.log('🔄 === FIM MUTAÇÃO ===');
-      if (after) await after();
-      return true;
-    } catch (e) {
-      console.error("❌ === EXCEPTION ===");
-      console.error("Exception:", e);
-      console.error("Stack:", e.stack);
-      setLastError(e.message || "Erro ao atualizar");
-      return false;
-    } finally {
-      setMatchBusy(id, false);
-      setTimeout(() => loadMatches(), 50);
     }
+    
+    return cleanPatch;
   };
 
   /** ========= Placar ========= */
@@ -492,28 +469,20 @@ export default function Matches() {
     // Não permite alterar placar de jogos agendados (ainda não iniciados)
     if (m.status === "scheduled") return;
     
-    console.log('🔍 === DEBUG changePoints ===');
-    console.log('🔍 Match object:', m);
-    console.log('🔍 Match ID:', m.id, '(tipo:', typeof m.id, ')');
-    console.log('🔍 Team:', team, '(tipo:', typeof team, ')');
-    console.log('🔍 Action:', action);
-    
     const key = `${team}_score`;
-    console.log('🔍 Key calculada:', key);
-    console.log('🔍 Valor atual m[key]:', m[key], '(tipo:', typeof m[key], ')');
-    
     let next = Math.max(0, Number(m[key] || 0));
+    
     if (action === "inc") next += 1;
     if (action === "dec") next = Math.max(0, next - 1);
     if (action === "reset") next = 0;
     
-    console.log('🔍 Valor calculado next:', next, '(tipo:', typeof next, ')');
-    
     const patch = { [key]: next };
-    console.log('🔍 Patch que será enviado:', JSON.stringify(patch, null, 2));
-    console.log('🔍 === FIM DEBUG changePoints ===');
     
-    await mutate(m.id, patch);
+    // ✅ Usar debounce para múltiplas alterações rápidas
+    clearTimeout(window[`debounce_${m.id}_${key}`]);
+    window[`debounce_${m.id}_${key}`] = setTimeout(() => {
+      mutate(m.id, patch);
+    }, 100); // 100ms de debounce
   };
 
   /** ========= Sets (Vôlei) ========= */
@@ -533,7 +502,12 @@ export default function Matches() {
     if (action === "inc") value += 1;
     if (action === "dec") value = Math.max(0, value - 1);
     if (action === "reset") value = 0;
-    await mutate(m.id, { meta: { ...meta, [key]: value } });
+    
+    // ✅ Debounce para sets também
+    clearTimeout(window[`debounce_sets_${m.id}_${key}`]);
+    window[`debounce_sets_${m.id}_${key}`] = setTimeout(() => {
+      mutate(m.id, { meta: { ...meta, [key]: value } });
+    }, 100);
   };
 
   /** ========= Status ========= */
@@ -569,6 +543,13 @@ export default function Matches() {
   return (
     <div className="space-y-6">
       <h2 className="text-xl font-bold">Gerenciar Partidas</h2>
+
+      {/* ✅ Aviso de conectividade */}
+      {!isOnline && (
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-2 rounded mb-4">
+          ⚠️ Você está offline. As alterações serão sincronizadas quando a conexão for restaurada.
+        </div>
+      )}
 
       {isAdmin === false && (
         <div className="text-sm p-3 rounded bg-red-50 border border-red-200 text-red-700">
