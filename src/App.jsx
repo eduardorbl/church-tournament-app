@@ -138,118 +138,124 @@ export default function App() {
       <RouterGuard>
         <div className="min-h-screen flex flex-col">
           {/* HEADER */}
-          <header className="bg-primary text-white py-4 sticky top-0 z-50 shadow-md">
-            <div className="container mx-auto grid grid-cols-[auto,1fr,auto] items-center gap-4">
-              {/* Logo (coluna esquerda) */}
-              <SafeNavLink to="/" className="hover:opacity-90 transition-opacity inline-flex items-center">
-                <img
-                  src="/logo-copa-influence.png"
-                  alt="Copa Influence"
-                  className="h-20 sm:h-24 lg:h-28 w-auto shrink-0 pointer-events-none select-none drop-shadow-md"
-                  loading="eager"
-                  decoding="async"
-                  fetchpriority="high"
-                />
-              </SafeNavLink>
-
-              <nav className="flex flex-wrap items-center gap-3 text-sm">
-                <SafeNavLink 
-                  to="/" 
-                  className={`hover:underline transition-colors ${
-                    location.pathname === '/' ? 'font-semibold' : ''
-                  }`}
-                >
-                  Home
-                </SafeNavLink>
-                <SafeNavLink 
-                  to="/futsal" 
-                  className={`hover:underline transition-colors ${
-                    location.pathname === '/futsal' ? 'font-semibold' : ''
-                  }`}
-                >
-                  Futsal
-                </SafeNavLink>
-                <SafeNavLink 
-                  to="/volei" 
-                  className={`hover:underline transition-colors ${
-                    location.pathname === '/volei' ? 'font-semibold' : ''
-                  }`}
-                >
-                  Vôlei
-                </SafeNavLink>
-                <SafeNavLink 
-                  to="/fifa" 
-                  className={`hover:underline transition-colors ${
-                    location.pathname === '/fifa' ? 'font-semibold' : ''
-                  }`}
-                >
-                  FIFA
-                </SafeNavLink>
-                <SafeNavLink 
-                  to="/pebolim" 
-                  className={`hover:underline transition-colors ${
-                    location.pathname === '/pebolim' ? 'font-semibold' : ''
-                  }`}
-                >
-                  Pebolim
-                </SafeNavLink>
-                <SafeNavLink 
-                  to="/ao-vivo" 
-                  className={`hover:underline transition-colors ${
-                    location.pathname === '/ao-vivo' ? 'font-semibold' : ''
-                  }`}
-                >
-                  Ao vivo
-                </SafeNavLink>
-                <SafeNavLink 
-                  to="/proximos" 
-                  className={`hover:underline transition-colors ${
-                    location.pathname === '/proximos' ? 'font-semibold' : ''
-                  }`}
-                >
-                  Próximos
+          <header className="bg-primary text-white sticky top-0 z-50 shadow-md">
+            <div className="container mx-auto px-4">
+              {/* Primeira linha: Logo + Botão Menu (mobile) + Login */}
+              <div className="flex items-center justify-between py-3">
+                {/* Logo */}
+                <SafeNavLink to="/" className="hover:opacity-90 transition-opacity">
+                  <img
+                    src="/logo-copa-influence.png"
+                    alt="Copa Influence"
+                    className="h-12 md:h-16 w-auto"
+                    loading="eager"
+                    decoding="async"
+                    fetchpriority="high"
+                  />
                 </SafeNavLink>
 
-                {/* Link admin só se logado e admin */}
-                {ready && isAdmin && (
-                  <SafeNavLink
-                    to="/admin"
-                    className={`ml-2 inline-block bg-white/15 hover:bg-white/25 transition-colors px-3 py-1 rounded ${
-                      location.pathname.startsWith('/admin') ? 'bg-white/25 font-semibold' : ''
+                {/* Login/Logout (sempre visível) */}
+                <div className="text-sm">
+                  {session ? (
+                    <div className="flex items-center gap-2">
+                      {session.user?.email && (
+                        <span className="text-white/80 text-xs hidden sm:inline">
+                          {session.user.email}
+                        </span>
+                      )}
+                      <button 
+                        onClick={handleSignOut} 
+                        className="hover:underline transition-colors hover:text-white/80 text-xs sm:text-sm"
+                      >
+                        Sair
+                      </button>
+                    </div>
+                  ) : (
+                    <SafeNavLink 
+                      to="/login" 
+                      className="hover:underline transition-colors hover:text-white/80 text-xs sm:text-sm"
+                    >
+                      Entrar
+                    </SafeNavLink>
+                  )}
+                </div>
+              </div>
+
+              {/* Segunda linha: Navegação (sempre visível em linha única) */}
+              <div className="border-t border-white/20 py-2">
+                <nav className="flex items-center justify-center gap-1 sm:gap-3 text-xs sm:text-sm overflow-x-auto">
+                  <SafeNavLink 
+                    to="/" 
+                    className={`hover:underline transition-colors whitespace-nowrap px-1 sm:px-2 ${
+                      location.pathname === '/' ? 'font-semibold' : ''
                     }`}
                   >
-                    Administrador
+                    Home
                   </SafeNavLink>
-                )}
-              </nav>
-
-              <div className="text-sm">
-                {session ? (
-                  <div className="flex items-center gap-3">
-                    {session.user?.email && (
-                      <span className="text-white/80 text-xs">
-                        {session.user.email}
-                      </span>
-                    )}
-                    <button 
-                      onClick={handleSignOut} 
-                      className="hover:underline transition-colors hover:text-white/80"
-                    >
-                      Sair
-                    </button>
-                  </div>
-                ) : (
                   <SafeNavLink 
-                    to="/login" 
-                    className="hover:underline transition-colors hover:text-white/80"
+                    to="/futsal" 
+                    className={`hover:underline transition-colors whitespace-nowrap px-1 sm:px-2 ${
+                      location.pathname === '/futsal' ? 'font-semibold' : ''
+                    }`}
                   >
-                    Entrar
+                    Futsal
                   </SafeNavLink>
-                )}
+                  <SafeNavLink 
+                    to="/volei" 
+                    className={`hover:underline transition-colors whitespace-nowrap px-1 sm:px-2 ${
+                      location.pathname === '/volei' ? 'font-semibold' : ''
+                    }`}
+                  >
+                    Vôlei
+                  </SafeNavLink>
+                  <SafeNavLink 
+                    to="/fifa" 
+                    className={`hover:underline transition-colors whitespace-nowrap px-1 sm:px-2 ${
+                      location.pathname === '/fifa' ? 'font-semibold' : ''
+                    }`}
+                  >
+                    FIFA
+                  </SafeNavLink>
+                  <SafeNavLink 
+                    to="/pebolim" 
+                    className={`hover:underline transition-colors whitespace-nowrap px-1 sm:px-2 ${
+                      location.pathname === '/pebolim' ? 'font-semibold' : ''
+                    }`}
+                  >
+                    Pebolim
+                  </SafeNavLink>
+                  <SafeNavLink 
+                    to="/ao-vivo" 
+                    className={`hover:underline transition-colors whitespace-nowrap px-1 sm:px-2 ${
+                      location.pathname === '/ao-vivo' ? 'font-semibold' : ''
+                    }`}
+                  >
+                    Ao vivo
+                  </SafeNavLink>
+                  <SafeNavLink 
+                    to="/proximos" 
+                    className={`hover:underline transition-colors whitespace-nowrap px-1 sm:px-2 ${
+                      location.pathname === '/proximos' ? 'font-semibold' : ''
+                    }`}
+                  >
+                    Próximos
+                  </SafeNavLink>
+
+                  {/* Link admin */}
+                  {ready && isAdmin && (
+                    <SafeNavLink
+                      to="/admin"
+                      className={`bg-white/15 hover:bg-white/25 transition-colors px-2 py-1 rounded text-xs whitespace-nowrap ml-1 sm:ml-2 ${
+                        location.pathname.startsWith('/admin') ? 'bg-white/25 font-semibold' : ''
+                      }`}
+                    >
+                      Admin
+                    </SafeNavLink>
+                  )}
+                </nav>
               </div>
             </div>
           </header>
-
           {/* MAIN */}
           <main className="flex-1 container mx-auto p-4">
             <React.Suspense fallback={<LoadingFallback />}>
