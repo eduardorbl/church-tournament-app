@@ -169,14 +169,21 @@ export default function App() {
           {/* ✅ HEADER OTIMIZADO */}
           <header className="bg-primary text-white p-4 sticky top-0 z-50 shadow-md">
             <div className="container mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
-              <SafeNavLink 
-                to="/" 
-                className="text-xl font-bold hover:opacity-90 transition-opacity"
-                isActive={false}
-              >
-                Copa Influence 🏆
-              </SafeNavLink>
-
+                {/* ✅ LOGO RESPONSIVO */}
+                <SafeNavLink 
+                  to="/" 
+                  className="flex items-center gap-3 hover:opacity-90 transition-opacity"
+                  isActive={false}
+                >
+                  <img 
+                    src="/logo-copa-influence.png" 
+                    alt="Copa Influence" 
+                    className="h-6 sm:h-8 w-auto object-contain"
+                  />
+                  <span className="text-lg sm:text-xl font-bold hidden md:block">
+                    Copa Influence
+                  </span>
+                </SafeNavLink>
               {/* ✅ NAVEGAÇÃO PRINCIPAL */}
               <nav className="flex flex-wrap items-center gap-3 text-sm">
                 <SafeNavLink 
