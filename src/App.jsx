@@ -138,13 +138,13 @@ export default function App() {
       <RouterGuard>
         <div className="min-h-screen flex flex-col">
           {/* HEADER */}
-          <header className="bg-primary text-white p-4 sticky top-0 z-50 shadow-md">
+          <header className="bg-primary text-white p-6 sticky top-0 z-50 shadow-md">
             <div className="container mx-auto flex flex-col md:flex-row items-center justify-between gap-4">
               <SafeNavLink to="/" className="hover:opacity-90 transition-opacity">
                   <img 
                     src="/logo-copa-influence.png" 
                     alt="Copa Influence" 
-                    className="h-8 md:h-10 w-auto"
+                    className="h-12 md:h-16 w-auto"
                   />
                 </SafeNavLink>
 
