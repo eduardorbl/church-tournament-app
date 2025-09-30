@@ -1,5 +1,5 @@
 // src/pages/MatchPage.jsx
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { useParams, Link } from "react-router-dom";
 import { supabase } from "../supabaseClient";
 import TeamBadge from "../components/TeamBadge";
@@ -23,7 +23,7 @@ const STAGE_LABEL = {
 // Storage
 const LOGO_BUCKET = "team-logos";
 
-// Funções auxiliares para logo
+// ---- Helpers: logos (bucket → URL pública) ----
 function isHttpUrl(str) {
   return typeof str === "string" && /^https?:\/\//i.test(str);
 }
@@ -32,7 +32,7 @@ function isStoragePath(str) {
 }
 function publicLogoUrl(raw) {
   if (!raw) return null;
-  if (isHttpUrl(raw)) return raw; // já é pública
+  if (isHttpUrl(raw)) return raw;
   if (isStoragePath(raw)) {
     const { data } = supabase.storage.from(LOGO_BUCKET).getPublicUrl(raw);
     return data?.publicUrl || null;
@@ -40,6 +40,7 @@ function publicLogoUrl(raw) {
   return null;
 }
 
+// ---- Datas em Campinas/SP ----
 const tz = "America/Sao_Paulo";
 function fmtDate(dt) {
   if (!dt) return "";
@@ -61,99 +62,171 @@ function prettyStage(stage) {
   return STAGE_LABEL[stage] || (stage[0]?.toUpperCase() + stage.slice(1));
 }
 
-function formatMetaLine({ stage, group_name, round }) {
+function formatMetaLine({ order_idx, stage, group_name }) {
+  // Padrão central: "Jogo x • Grupo G" (+ fase discreta no chip)
   const parts = [];
-  if (stage) parts.push(prettyStage(stage));
+  if (order_idx) parts.push(`Jogo ${order_idx}`);
   if (group_name) parts.push(`Grupo ${group_name}`);
-  if (round) parts.push(`Jogo ${round}`);
   return parts.join(" • ");
 }
 
-// Formatar tempo em minutos:segundos baseado no tempo decorrido
+// ---- Cronômetro simples (baseado em starts_at/updated_at) ----
 function formatGameTime(match, currentTimestamp) {
-  if (!match || match.status === 'scheduled' || match.status === 'finished') {
+  if (!match || match.status === "scheduled" || match.status === "finished") {
     return "0:00";
   }
-  
-  const startTime = new Date(match.starts_at);
-  const currentTime = match.status === 'paused' 
-    ? new Date(match.updated_at) 
-    : new Date(currentTimestamp || Date.now());
-  
-  // Calcula diferença em milissegundos
+
+  const startTime = match.starts_at ? new Date(match.starts_at) : null;
+  const currentTime =
+    match.status === "paused"
+      ? new Date(match.updated_at || Date.now())
+      : new Date(currentTimestamp || Date.now());
+
+  if (!startTime) return "0:00";
+
   const diffMs = currentTime - startTime;
-  
-  // Se a diferença for negativa (jogo ainda não começou), retorna 0:00
   if (diffMs < 0) return "0:00";
-  
-  // Converte para minutos e segundos
+
   const totalSeconds = Math.floor(diffMs / 1000);
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
-  
-  return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
-// Barra animada para jogos ao vivo/pausados
+// ---- Barra animada topo do card quando ao vivo/pausado ----
 function LiveProgressBar({ status }) {
   if (status !== "ongoing" && status !== "paused") return null;
-  
+
   const isOngoing = status === "ongoing";
   const barColor = isOngoing ? "bg-blue-500" : "bg-orange-500";
   const bgColor = isOngoing ? "bg-blue-100" : "bg-orange-100";
-  
+
   return (
-    <div className={`absolute top-0 left-0 right-0 h-1 ${bgColor} overflow-hidden rounded-t-lg`}>
-      <div 
+    <div className={`absolute top-0 left-0 right-0 h-1 ${bgColor} overflow-hidden rounded-t-2xl`}>
+      <div
         className={`h-full ${barColor}`}
         style={{
-          animation: isOngoing 
-            ? 'slideProgress 3s ease-in-out infinite' 
-            : 'none',
-          width: '100%'
+          animation: isOngoing ? "slideProgress 3s ease-in-out infinite" : "none",
+          width: "100%",
         }}
       />
     </div>
   );
 }
 
+// ---- Chip de status + relógio ----
 function StatusPill({ status, meta, starts_at, updated_at, currentTimestamp }) {
   const base =
-    "inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium";
+    "inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold tracking-wide border";
   const style =
     status === "ongoing"
-      ? "bg-green-100 text-green-700"
+      ? "bg-green-50 text-green-700 border-green-200"
       : status === "paused"
-      ? "bg-yellow-100 text-yellow-700"
+      ? "bg-amber-50 text-amber-700 border-amber-200"
       : status === "finished"
-      ? "bg-gray-200 text-gray-700"
-      : "bg-blue-100 text-blue-700";
-  
+      ? "bg-gray-100 text-gray-700 border-gray-200"
+      : "bg-blue-50 text-blue-700 border-blue-200";
+
   const clock = meta?.clock || meta?.time || meta?.minute;
   const isLive = status === "ongoing" || status === "paused";
-  
+
   const suffix =
     status === "scheduled"
       ? starts_at
-        ? `• ${fmtDate(starts_at)}`
+        ? ` • ${fmtDate(starts_at)}`
         : ""
       : status === "finished"
       ? updated_at
-        ? `• ${fmtDate(updated_at)}`
+        ? ` • ${fmtDate(updated_at)}`
         : ""
       : clock
-      ? `• ${clock}`
+      ? ` • ${clock}`
       : "";
-      
+
   return (
     <div className="flex items-center gap-2">
       <span className={`${base} ${style}`}>
-        {STATUS_LABEL[status] || status} {suffix ? <span>{suffix}</span> : null}
+        {STATUS_LABEL[status] || status}
+        {suffix ? <span>{suffix}</span> : null}
       </span>
       {isLive && (
         <span className="inline-flex items-center gap-1 text-[11px] font-medium text-gray-600">
           🕐 {formatGameTime({ status, starts_at, updated_at }, currentTimestamp)}
         </span>
+      )}
+    </div>
+  );
+}
+
+// ---- Chip de fase ----
+function StagePill({ stage }) {
+  if (!stage) return null;
+  const label = prettyStage(stage);
+  return (
+    <span className="inline-flex items-center rounded-full border border-gray-300 bg-white px-2 py-0.5 text-[10px] font-semibold tracking-wide text-gray-700">
+      {label}
+    </span>
+  );
+}
+
+// ---- Lado do time (badge + link nome) ----
+function TeamSide({ team, align = "left", badgeSize = 48 }) {
+  const hasTeam = Boolean(team?.id);
+  const content = (
+    <>
+      {align === "right" ? null : <TeamBadge team={team || { name: "A definir" }} size={badgeSize} />}
+      <span
+        className={`block truncate text-base sm:text-lg font-semibold ${
+          hasTeam ? "text-gray-900" : "text-gray-400"
+        } ${align === "right" ? "text-right" : ""}`}
+        title={team?.name || "A definir"}
+      >
+        {team?.name || "A definir"}
+      </span>
+      {align === "right" ? <TeamBadge team={team || { name: "A definir" }} size={badgeSize} /> : null}
+    </>
+  );
+
+  if (!hasTeam) {
+    return (
+      <div
+        className={`min-w-0 flex items-center gap-3 ${align === "right" ? "justify-end" : ""}`}
+      >
+        {content}
+      </div>
+    );
+  }
+
+  return (
+    <Link
+      to={`/team/${team.id}`}
+      className={`min-w-0 flex items-center gap-3 hover:underline ${align === "right" ? "justify-end" : ""}`}
+      onClick={(e) => e.stopPropagation()}
+      title={team?.name}
+    >
+      {content}
+    </Link>
+  );
+}
+
+// ---- Cartão de elenco ----
+function RosterCard({ title, players }) {
+  return (
+    <div className="bg-white border rounded-2xl p-4 shadow-sm">
+      <h3 className="font-semibold mb-2">{title}</h3>
+      {players.length === 0 ? (
+        <p className="text-sm text-gray-500">Nenhum jogador cadastrado.</p>
+      ) : (
+        <ul className="text-sm divide-y">
+          {players.map((p) => (
+            <li key={p.id} className="flex items-center justify-between py-1.5">
+              <span className="truncate">{p.name}</span>
+              <span className="inline-block w-8 text-right tabular-nums text-gray-500">
+                {p.number ?? ""}
+              </span>
+            </li>
+          ))}
+        </ul>
       )}
     </div>
   );
@@ -165,19 +238,26 @@ export default function MatchPage() {
   const [homePlayers, setHomePlayers] = useState([]);
   const [awayPlayers, setAwayPlayers] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [currentTimestamp, setCurrentTimestamp] = useState(Date.now());
   const channelRef = useRef(null);
   const timerRef = useRef(null);
+  const loadingRef = useRef(false);
 
   const isVolei = useMemo(
-    () => (match?.sport?.name || "").toLowerCase().includes("vole"),
+    () => (match?.sport?.name || "").toLowerCase().includes("volei"),
     [match?.sport?.name]
   );
 
-  const load = async () => {
+  const load = useCallback(async () => {
+    if (!id || loadingRef.current) return;
+
+    loadingRef.current = true;
     setLoading(true);
+    setError(null);
+
     try {
-      // 1) Tenta pela view agregada
+      // 1) Tenta pela view agregada (inclui order_idx para exibirmos "Jogo x")
       const { data: viewData, error: viewError } = await supabase
         .from("match_detail_view")
         .select(
@@ -185,7 +265,7 @@ export default function MatchPage() {
           id, sport_id, sport_name, stage, round, group_name, starts_at, venue, status,
           home_team_id, home_team_name, home_team_color, home_team_logo,
           away_team_id, away_team_name, away_team_color, away_team_logo,
-          home_score, away_score, created_at, updated_at
+          home_score, away_score, order_idx, created_at, updated_at
         `
         )
         .eq("id", id)
@@ -204,6 +284,7 @@ export default function MatchPage() {
           updated_at: viewData.updated_at,
           venue: viewData.venue,
           status: viewData.status,
+          order_idx: viewData.order_idx,
           meta: null,
           home_score: viewData.home_score,
           away_score: viewData.away_score,
@@ -227,7 +308,7 @@ export default function MatchPage() {
           },
         };
 
-        // Pega meta (clock/sets) direto da matches
+        // Pega meta (clock/sets) direto de matches
         const { data: rawMatch } = await supabase
           .from("matches")
           .select("meta")
@@ -235,14 +316,14 @@ export default function MatchPage() {
           .maybeSingle();
         if (rawMatch?.meta) m.meta = rawMatch.meta;
       } else {
-        // 2) Fallback: join direto em matches
-        const { data: joinData } = await supabase
+        // 2) Fallback: join direto em matches (inclui order_idx)
+        const { data: joinData, error: joinError } = await supabase
           .from("matches")
           .select(
             `
             id,
             sport:sport_id ( id, name ),
-            stage, round, group_name, starts_at, updated_at, venue, status, meta,
+            stage, round, group_name, starts_at, updated_at, venue, status, meta, order_idx,
             home_score, away_score,
             home:home_team_id ( id, name, logo_url, color ),
             away:away_team_id ( id, name, logo_url, color )
@@ -251,77 +332,95 @@ export default function MatchPage() {
           .eq("id", id)
           .maybeSingle();
 
+        if (joinError) throw joinError;
+
         if (joinData) {
-          // Normaliza os logos
-          const normalizedMatch = {
+          m = {
             ...joinData,
-            home: joinData.home && typeof joinData.home === "object"
-              ? {
-                  ...joinData.home,
-                  logo_url: (() => {
-                    const url = publicLogoUrl(joinData.home.logo_url);
-                    return url ? `${url}${url.includes("?") ? "&" : "?"}v=1` : null;
-                  })(),
-                }
-              : joinData.home,
-            away: joinData.away && typeof joinData.away === "object"
-              ? {
-                  ...joinData.away,
-                  logo_url: (() => {
-                    const url = publicLogoUrl(joinData.away.logo_url);
-                    return url ? `${url}${url.includes("?") ? "&" : "?"}v=1` : null;
-                  })(),
-                }
-              : joinData.away,
+            home:
+              joinData.home && typeof joinData.home === "object"
+                ? {
+                    ...joinData.home,
+                    logo_url: (() => {
+                      const url = publicLogoUrl(joinData.home.logo_url);
+                      return url ? `${url}${url.includes("?") ? "&" : "?"}v=1` : null;
+                    })(),
+                  }
+                : joinData.home,
+            away:
+              joinData.away && typeof joinData.away === "object"
+                ? {
+                    ...joinData.away,
+                    logo_url: (() => {
+                      const url = publicLogoUrl(joinData.away.logo_url);
+                      return url ? `${url}${url.includes("?") ? "&" : "?"}v=1` : null;
+                    })(),
+                  }
+                : joinData.away,
           };
-          m = normalizedMatch;
         }
       }
 
+      if (!m) throw new Error("Partida não encontrada");
       setMatch(m);
 
-      // 3) Elencos
+      // 3) Elencos (se existirem times)
+      const playerPromises = [];
       if (m?.home?.id) {
-        const { data: hp } = await supabase
-          .from("players")
-          .select("id, name, number")
-          .eq("team_id", m.home.id)
-          .order("number", { ascending: true, nullsFirst: true })
-          .order("name");
-        setHomePlayers(hp || []);
+        playerPromises.push(
+          supabase
+            .from("players")
+            .select("id, name, number")
+            .eq("team_id", m.home.id)
+            .order("number", { ascending: true, nullsFirst: true })
+            .order("name")
+        );
       } else {
-        setHomePlayers([]);
+        playerPromises.push(Promise.resolve({ data: [] }));
       }
 
       if (m?.away?.id) {
-        const { data: ap } = await supabase
-          .from("players")
-          .select("id, name, number")
-          .eq("team_id", m.away.id)
-          .order("number", { ascending: true, nullsFirst: true })
-          .order("name");
-        setAwayPlayers(ap || []);
+        playerPromises.push(
+          supabase
+            .from("players")
+            .select("id, name, number")
+            .eq("team_id", m.away.id)
+            .order("number", { ascending: true, nullsFirst: true })
+            .order("name")
+        );
       } else {
-        setAwayPlayers([]);
+        playerPromises.push(Promise.resolve({ data: [] }));
       }
+
+      const [homeRes, awayRes] = await Promise.all(playerPromises);
+      setHomePlayers(homeRes.data || []);
+      setAwayPlayers(awayRes.data || []);
+    } catch (err) {
+      console.error("Error loading match:", err);
+      setError(err.message || "Erro ao carregar partida");
     } finally {
       setLoading(false);
+      loadingRef.current = false;
     }
-  };
+  }, [id]);
 
   useEffect(() => {
+    if (!id) return;
+
     load();
 
-    // Timer para atualizar o timestamp a cada segundo
+    // Tick de relógio por segundo (🕐)
+    if (timerRef.current) clearInterval(timerRef.current);
     timerRef.current = setInterval(() => {
       setCurrentTimestamp(Date.now());
     }, 1000);
 
-    // Realtime
+    // Realtime: match + eventos
     if (channelRef.current) {
       supabase.removeChannel(channelRef.current);
       channelRef.current = null;
     }
+
     const channel = supabase
       .channel(`match-${id}`)
       .on(
@@ -337,15 +436,24 @@ export default function MatchPage() {
       .subscribe();
 
     channelRef.current = channel;
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-      if (channelRef.current) supabase.removeChannel(channelRef.current);
-      channelRef.current = null;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
 
-  const metaLine = useMemo(() => (match ? formatMetaLine(match) : ""), [match]);
+    return () => {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current);
+        channelRef.current = null;
+      }
+    };
+  }, [id, load]);
+
+  const metaCenter = useMemo(
+    () => (match ? formatMetaLine(match) : ""),
+    [match]
+  );
+
   const home = match?.home;
   const away = match?.away;
 
@@ -353,23 +461,43 @@ export default function MatchPage() {
   const homeSets = Number(match?.meta?.home_sets ?? 0);
   const awaySets = Number(match?.meta?.away_sets ?? 0);
   const hasAnySetValue = homeSets > 0 || awaySets > 0;
-  const shouldShowSetsRow = isVolei || hasAnySetValue;
+  const shouldShowSets = isVolei || hasAnySetValue;
 
-  // Pontos/placar: só mostra quando não for "Agendado"
+  // Placar somente quando != scheduled
   const shouldShowScore = match?.status && match.status !== "scheduled";
   const homeScore = Number(match?.home_score ?? 0);
   const awayScore = Number(match?.away_score ?? 0);
 
   const isLive = match?.status === "ongoing" || match?.status === "paused";
 
+  // ---- Renderização ----
+  if (error) {
+    return (
+      <div className="text-center py-12">
+        <div className="text-4xl mb-4">⚠️</div>
+        <p className="text-lg text-red-600 mb-2">Erro ao carregar partida</p>
+        <p className="text-sm text-gray-500 mb-4">{error}</p>
+        <button
+          onClick={() => {
+            setError(null);
+            load();
+          }}
+          className="bg-blue-600 text-white px-4 py-2 rounded-xl hover:bg-blue-700"
+        >
+          Tentar novamente
+        </button>
+      </div>
+    );
+  }
+
   if (loading || !match) {
     return (
       <div className="space-y-4">
-        <div className="h-6 w-40 bg-gray-100 rounded animate-pulse" />
-        <div className="h-28 w-full bg-gray-100 rounded animate-pulse" />
+        <div className="h-6 w-44 bg-gray-100 rounded animate-pulse" />
+        <div className="h-36 w-full bg-gray-100 rounded-2xl animate-pulse" />
         <div className="grid md:grid-cols-2 gap-4">
-          <div className="h-52 bg-gray-100 rounded animate-pulse" />
-          <div className="h-52 bg-gray-100 rounded animate-pulse" />
+          <div className="h-56 bg-gray-100 rounded-2xl animate-pulse" />
+          <div className="h-56 bg-gray-100 rounded-2xl animate-pulse" />
         </div>
       </div>
     );
@@ -377,9 +505,9 @@ export default function MatchPage() {
 
   return (
     <div className="space-y-6">
-      {/* Cabeçalho */}
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
+      {/* Cabeçalho (status + fase/chips) */}
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-wrap items-center gap-2">
           <StatusPill
             status={match.status}
             meta={match.meta}
@@ -387,9 +515,10 @@ export default function MatchPage() {
             updated_at={match.updated_at}
             currentTimestamp={currentTimestamp}
           />
-          {metaLine && (
-            <div className="text-xs text-gray-500" aria-label="Detalhes da fase">
-              {metaLine}
+          {match.stage ? <StagePill stage={match.stage} /> : null}
+          {metaCenter && (
+            <div className="text-xs text-gray-600" aria-label="Detalhes">
+              {metaCenter}
             </div>
           )}
         </div>
@@ -399,96 +528,69 @@ export default function MatchPage() {
         </div>
       </div>
 
-      {/* Placar / Sets */}
-      <div className={`bg-white border rounded-lg p-4 shadow-sm relative overflow-hidden ${
-        isLive 
-          ? match.status === "ongoing" 
-            ? "border-blue-200" 
-            : "border-orange-200"
-          : "border-gray-200"
-      }`}>
+      {/* Placar / Sets — Card hero */}
+      <div
+        className={`relative overflow-hidden rounded-2xl border p-4 sm:p-5 shadow-sm ${
+          isLive ? (match.status === "ongoing" ? "border-blue-200" : "border-amber-200") : "border-gray-200"
+        }`}
+      >
         <LiveProgressBar status={match.status} />
-        
-        <div className="grid grid-cols-3 items-center gap-2">
-          {/* Time à esquerda */}
-          <div className="flex items-center gap-3 min-w-0">
-            <TeamBadge team={home || { name: "A definir" }} size={40} />
-            <div className="min-w-0">
-              <Link
-                to={home?.id ? `/team/${home.id}` : "#"}
-                className={`block font-semibold truncate hover:underline ${
-                  home?.id ? "text-gray-900" : "text-gray-400 pointer-events-none"
-                }`}
-                onClick={(e) => {
-                  if (!home?.id) e.preventDefault();
-                }}
-                title={home?.name || "A definir"}
-              >
-                {home?.name || "A definir"}
-              </Link>
-            </div>
+
+        {/* background decorativo leve */}
+        <div className="pointer-events-none absolute -top-24 -right-24 h-64 w-64 rounded-full bg-gradient-to-br from-blue-50 to-indigo-50 blur-3xl" />
+        <div className="pointer-events-none absolute -bottom-24 -left-24 h-64 w-64 rounded-full bg-gradient-to-tr from-pink-50 to-rose-50 blur-3xl" />
+
+        <div className="relative grid grid-cols-1 items-center gap-4 sm:grid-cols-3">
+          {/* Home */}
+          <div className="min-w-0">
+            <TeamSide team={home} badgeSize={56} />
           </div>
 
-          {/* Centro: Sets (quando aplicável) + Pontos */}
+          {/* Centro: sets + placar + info live */}
           <div className="text-center">
-            {shouldShowSetsRow ? (
-              <div className="text-sm font-semibold tabular-nums mb-1">
-                <span className={`${!shouldShowScore ? "text-gray-400" : ""}`}>
-                  Sets: {homeSets} <span className="text-gray-400">x</span> {awaySets}
+            {shouldShowSets ? (
+              <div className="mb-1 flex items-center justify-center gap-2">
+                <span className="inline-flex items-center rounded-full border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-gray-700">
+                  Sets <span className="ml-1 tabular-nums">{homeSets}</span>
+                  <span className="mx-1 text-gray-400">x</span>
+                  <span className="tabular-nums">{awaySets}</span>
                 </span>
               </div>
             ) : null}
 
             {shouldShowScore ? (
-              <div className="text-3xl font-bold tabular-nums">
+              <div className="text-4xl font-extrabold tabular-nums leading-none sm:text-5xl">
                 {homeScore} <span className="text-gray-400">x</span> {awayScore}
               </div>
             ) : (
               <div className="text-sm text-gray-400">—</div>
             )}
 
-            <div className="text-[11px] text-gray-500 mt-1">
+            <div className="mt-1 text-[11px] text-gray-500">
               {STATUS_LABEL[match.status] || match.status}
-              {isLive && (
-                <span className="ml-2">
-                  🕐 {formatGameTime(match, currentTimestamp)}
-                </span>
-              )}
-              {match.meta?.clock ? ` • ${match.meta.clock}` : ""}
+              {isLive ? (
+                <span className="ml-2">🕐 {formatGameTime(match, currentTimestamp)}</span>
+              ) : null}
+              {match.meta?.clock ? <span className="ml-2">{match.meta.clock}</span> : null}
             </div>
           </div>
 
-          {/* Time à direita */}
-          <div className="flex items-center gap-3 min-w-0 justify-end">
-            <div className="min-w-0 text-right">
-              <Link
-                to={away?.id ? `/team/${away.id}` : "#"}
-                className={`block font-semibold truncate hover:underline ${
-                  away?.id ? "text-gray-900" : "text-gray-400 pointer-events-none"
-                }`}
-                onClick={(e) => {
-                  if (!away?.id) e.preventDefault();
-                }}
-                title={away?.name || "A definir"}
-              >
-                {away?.name || "A definir"}
-              </Link>
-            </div>
-            <TeamBadge team={away || { name: "A definir" }} size={40} />
+          {/* Away */}
+          <div className="min-w-0 sm:text-right">
+            <TeamSide team={away} align="right" badgeSize={56} />
           </div>
         </div>
 
         {/* Nota explicativa para Vôlei */}
         {isVolei ? (
-          <div className="text-[11px] text-gray-500 mt-2">
-            Vôlei: partidas em <strong>um set de 15 pontos</strong>. É necessário ter{" "}
-            <strong>2 pontos de vantagem</strong> para vencer.
+          <div className="relative mt-3 text-[11px] text-gray-500">
+            Vôlei: partidas em <strong>um set de 15 pontos</strong> (2 pontos de vantagem para vencer).
           </div>
         ) : null}
       </div>
 
-      {/* Detalhes */}
-      <div className="bg-white border rounded-lg p-3 shadow-sm">
+      {/* Detalhes resumidos */}
+      <div className="bg-white border rounded-2xl p-4 shadow-sm">
         <div className="text-[11px] font-semibold text-gray-500 mb-2">Detalhes</div>
         <ul className="text-sm grid sm:grid-cols-2 gap-x-6 gap-y-1">
           <li>
@@ -504,8 +606,8 @@ export default function MatchPage() {
             <span className="font-medium">{match.group_name || "—"}</span>
           </li>
           <li>
-            <span className="text-gray-500">Rodada:</span>{" "}
-            <span className="font-medium">{match.round ?? "—"}</span>
+            <span className="text-gray-500">Jogo nº:</span>{" "}
+            <span className="font-medium">{match.order_idx ?? "—"}</span>
           </li>
           <li>
             <span className="text-gray-500">Início:</span>{" "}
@@ -526,50 +628,13 @@ export default function MatchPage() {
 
       {/* Elencos lado a lado */}
       <div className="grid md:grid-cols-2 gap-4">
-        {/* Elenco esquerda */}
-        <div className="bg-white border rounded-lg p-4 shadow-sm">
-          <h3 className="font-semibold mb-2">Elenco — {home?.name || "A definir"}</h3>
-          {homePlayers.length === 0 ? (
-            <p className="text-sm text-gray-500">Nenhum jogador cadastrado.</p>
-          ) : (
-            <ul className="text-sm divide-y">
-              {homePlayers.map((p) => (
-                <li key={p.id} className="flex items-center justify-between py-1">
-                  <span className="truncate">{p.name}</span>
-                  <span className="inline-block w-8 text-right tabular-nums text-gray-500">
-                    {p.number ?? ""}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
-        {/* Elenco direita */}
-        <div className="bg-white border rounded-lg p-4 shadow-sm">
-          <h3 className="font-semibold mb-2">Elenco — {away?.name || "A definir"}</h3>
-          {awayPlayers.length === 0 ? (
-            <p className="text-sm text-gray-500">Nenhum jogador cadastrado.</p>
-          ) : (
-            <ul className="text-sm divide-y">
-              {awayPlayers.map((p) => (
-                <li key={p.id} className="flex items-center justify-between py-1">
-                  <span className="truncate">{p.name}</span>
-                  <span className="inline-block w-8 text-right tabular-nums text-gray-500">
-                    {p.number ?? ""}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+        <RosterCard title={`Elenco — ${home?.name || "A definir"}`} players={homePlayers} />
+        <RosterCard title={`Elenco — ${away?.name || "A definir"}`} players={awayPlayers} />
       </div>
 
-      {/* Rodapé/observação curta */}
+      {/* Rodapé curto */}
       <div className="text-xs text-gray-500">
-        {match.status === "finished" && match.updated_at
-          ? `Encerrado em ${fmtDate(match.updated_at)}`
-          : null}
+        {match.status === "finished" && match.updated_at ? `Encerrado em ${fmtDate(match.updated_at)}` : null}
       </div>
 
       <style jsx global>{`

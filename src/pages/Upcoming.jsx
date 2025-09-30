@@ -273,8 +273,6 @@ export default function Upcoming() {
   const [loading, setLoading] = useState(true);
   const [bySport, setBySport] = useState({}); // { "Futsal": [matches...], ... }
   const [currentTimestamp, setCurrentTimestamp] = useState(Date.now());
-  const channelRef = useRef(null);
-  const timerRef = useRef(null);
 
   // Carrega todas as partidas já com join de esporte e times
   const loadAll = async () => {
@@ -294,13 +292,12 @@ export default function Upcoming() {
       .order("starts_at", { ascending: true, nullsFirst: true });
 
     if (error) {
-      console.error(error);
+      console.error("Erro ao carregar próximas partidas:", error);
       setBySport({});
       setLoading(false);
       return;
     }
 
-    // Normaliza os logos (transforma caminho do storage em URL pública)
     const normalized = (data || []).map((m) => {
       const home =
         m.home && typeof m.home === "object"
@@ -337,34 +334,19 @@ export default function Upcoming() {
     setLoading(false);
   };
 
+  // UseEffect SIMPLIFICADO - executa apenas uma vez
   useEffect(() => {
     loadAll();
 
-    // Timer para atualizar o timestamp a cada minuto (suficiente para "próximos")
-    timerRef.current = setInterval(() => {
+    // Timer simples para atualizar timestamp
+    const timer = setInterval(() => {
       setCurrentTimestamp(Date.now());
     }, 60000); // 1 minuto
 
-    // Realtime: qualquer mudança em matches força reload
-    if (channelRef.current) {
-      supabase.removeChannel(channelRef.current);
-    }
-    const channel = supabase
-      .channel("upcoming-matches")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "matches" },
-        () => loadAll()
-      )
-      .subscribe();
-    channelRef.current = channel;
-
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-      if (channelRef.current) supabase.removeChannel(channelRef.current);
-      channelRef.current = null;
+      clearInterval(timer);
     };
-  }, []);
+  }, []); // Array vazio - executa apenas UMA vez
 
   // Lista de esportes na ordem desejada; extras alfabeticamente no final
   const sportNames = useMemo(() => {

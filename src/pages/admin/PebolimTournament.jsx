@@ -1,5 +1,5 @@
 // src/pages/admin/PebolimTournament.jsx
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../supabaseClient";
 import { useNavigate } from "react-router-dom";
 
@@ -13,67 +13,94 @@ export default function PebolimTournament() {
   );
   const [selected, setSelected] = useState(new Set());
   const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [sportId, setSportId] = useState(null);
+
+  const loadingRef = useRef(false);
+  const mountedRef = useRef(true);
   const navigate = useNavigate();
 
-  // Carrega times de Pebolim e pré-carrega grupos se já existirem
-  const loadTeams = async () => {
+  // Carrega modalidade + times e reconstrói os grupos respeitando seed_in_group quando existir
+  const loadAll = async () => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
     setLoading(true);
 
-    const { data: sport, error: sportErr } = await supabase
-      .from("sports")
-      .select("id")
-      .eq("name", "Pebolim")
-      .maybeSingle();
+    try {
+      const { data: sport, error: sportErr } = await supabase
+        .from("sports")
+        .select("id")
+        .eq("name", "Pebolim")
+        .maybeSingle();
 
-    if (sportErr) {
-      alert("Erro ao buscar a modalidade Pebolim.");
-      setLoading(false);
-      return;
-    }
-
-    if (sport?.id) {
-      const { data: tms, error: teamsErr } = await supabase
-        .from("teams")
-        .select("id,name,logo_url,color,group_name")
-        .eq("sport_id", sport.id)
-        .order("name");
-
-      if (teamsErr) {
-        alert("Erro ao carregar times de Pebolim.");
-        setLoading(false);
+      if (sportErr || !sport?.id) {
+        alert("Erro ao buscar a modalidade Pebolim.");
         return;
       }
+      setSportId(sport.id);
 
+      const { data: tms, error: teamsErr } = await supabase
+        .from("teams")
+        .select("id,name,logo_url,color,group_name,seed_in_group")
+        .eq("sport_id", sport.id)
+        .order("name");
+      if (teamsErr) {
+        alert("Erro ao carregar times de Pebolim.");
+        return;
+      }
       setTeams(tms || []);
 
-      // Pré-preenche grupos com base no group_name existente
+      // Reconstrói 'groups' a partir do que já existe no banco
       const next = GROUP_KEYS.reduce((acc, g) => ({ ...acc, [g]: [] }), {});
-      (tms || []).forEach((t) => {
-        if (t.group_name && GROUP_KEYS.includes(t.group_name)) {
-          next[t.group_name].push(t.id);
+      const grouped = (tms || []).reduce((acc, t) => {
+        if (GROUP_KEYS.includes(t.group_name)) {
+          (acc[t.group_name] = acc[t.group_name] || []).push(t);
         }
+        return acc;
+      }, {});
+      GROUP_KEYS.forEach((g) => {
+        const arr = (grouped[g] || []).sort((a, b) => {
+          const sa = a.seed_in_group ?? 999;
+          const sb = b.seed_in_group ?? 999;
+          if (sa !== sb) return sa - sb;
+          return a.name.localeCompare(b.name);
+        });
+        next[g] = arr.map((t) => t.id);
       });
       setGroups(next);
+    } finally {
+      setLoading(false);
+      loadingRef.current = false;
     }
-
-    setLoading(false);
   };
 
   useEffect(() => {
-    loadTeams();
+    mountedRef.current = true;
+    loadAll();
+
+    // Atualiza se outro admin mexer nos times
+    const ch = supabase
+      .channel("pebolim-admin")
+      .on("postgres_changes", { event: "*", schema: "public", table: "teams" }, () => {
+        if (mountedRef.current && !loadingRef.current) loadAll();
+      })
+      .subscribe();
+
+    return () => {
+      mountedRef.current = false;
+      supabase.removeChannel(ch);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Times já atribuídos a algum grupo
-  const assigned = useMemo(() => {
-    return new Set(GROUP_KEYS.flatMap((g) => groups[g]));
-  }, [groups]);
+  // ===== Seleção/Grupos (UI) =====
+  const assigned = useMemo(() => new Set(GROUP_KEYS.flatMap((g) => groups[g])), [groups]);
 
-  // Times disponíveis
-  const availableTeams = useMemo(() => {
-    return teams.filter((t) => !assigned.has(t.id));
-  }, [teams, assigned]);
+  const availableTeams = useMemo(
+    () => teams.filter((t) => !assigned.has(t.id)),
+    [teams, assigned]
+  );
 
-  // Toggle seleção
   const toggleSelect = (teamId) => {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -83,10 +110,9 @@ export default function PebolimTournament() {
     });
   };
 
-  // Envia selecionados para um grupo
   const handleAssignToGroup = (group) => {
     const ids = Array.from(selected);
-    if (ids.length === 0) {
+    if (!ids.length) {
       alert("Selecione ao menos 1 time.");
       return;
     }
@@ -99,169 +125,83 @@ export default function PebolimTournament() {
     setGroups((prev) => {
       const next = { ...prev };
       for (const id of ids) {
-        // Remove o time de quaisquer outros grupos
-        for (const g of GROUP_KEYS) {
-          next[g] = next[g].filter((tid) => tid !== id);
-        }
-        // Adiciona no grupo alvo
+        // Remove de outros grupos
+        for (const g of GROUP_KEYS) next[g] = next[g].filter((tid) => tid !== id);
+        // Adiciona no alvo
         next[group] = [...next[group], id];
       }
       return next;
     });
-
     setSelected(new Set());
   };
 
-  // Remove time de todos os grupos
   const handleRemoveFromGroup = (teamId) => {
     setGroups((prev) => {
       const next = { ...prev };
-      for (const g of GROUP_KEYS) {
-        next[g] = next[g].filter((tid) => tid !== teamId);
-      }
+      for (const g of GROUP_KEYS) next[g] = next[g].filter((tid) => tid !== teamId);
       return next;
     });
   };
 
-  // Todos os grupos válidos?
-  const allGroupsValid = GROUP_KEYS.every(
-    (g) => groups[g].length === TEAMS_PER_GROUP
-  );
+  const allGroupsValid = GROUP_KEYS.every((g) => groups[g].length === TEAMS_PER_GROUP);
 
-  // Gera jogos de fase de grupos (3 jogos por grupo: 1-2, 1-3, 2-3)
-  const buildGroupMatches = (sportId) => {
-    const rows = [];
-    const venue = "Mesa Pebolim";
-    GROUP_KEYS.forEach((g) => {
-      const ids = groups[g];
-      if (ids.length === TEAMS_PER_GROUP) {
-        const pairs = [
-          [ids[0], ids[1]],
-          [ids[0], ids[2]],
-          [ids[1], ids[2]],
-        ];
-        pairs.forEach(([home, away], idx) => {
-          rows.push({
-            sport_id: sportId,
-            stage: "grupos",
-            round: idx + 1, // 1..3 por grupo
-            group_name: g,
-            status: "scheduled",
-            home_team_id: home,
-            away_team_id: away,
-            venue,
-          });
-        });
-      }
-    });
-    return rows;
-  };
-
-  // Confirma grupos → salva no banco → cria jogos → navega para /admin
+  // ===== Confirmar e Gerar (salva grupos + seeds e chama RPC p/ criar jogos com ordem fixa) =====
   const confirmGroups = async () => {
     if (!allGroupsValid) {
       alert("Complete todos os grupos antes de confirmar!");
       return;
     }
+    if (!sportId) {
+      alert("Modalidade Pebolim não encontrada.");
+      return;
+    }
 
     try {
-      // 1) ID do esporte
-      const { data: sport, error: sportErr } = await supabase
-        .from("sports")
-        .select("id")
-        .eq("name", "Pebolim")
-        .maybeSingle();
+      setBusy(true);
 
-      if (sportErr || !sport?.id) {
-        alert("Não encontrei a modalidade Pebolim no banco.");
-        return;
-      }
-
-      const sportId = sport.id;
-
-      // 2) Se já houver campeonato/matches existentes, confirmar reset
-      const { count: existingMatches } = await supabase
-        .from("matches")
-        .select("*", { count: "exact", head: true })
-        .eq("sport_id", sportId);
-
-      if (existingMatches && existingMatches > 0) {
-        const ok = window.confirm(
-          "Já existe um campeonato de Pebolim. Criar um novo vai apagar jogos, chaves e classificação existentes. Deseja continuar?"
-        );
-        if (!ok) return;
-
-        // Apaga jogos (match_events caem por CASCADE)
-        const { error: delMatchesErr } = await supabase
-          .from("matches")
-          .delete()
-          .eq("sport_id", sportId);
-        if (delMatchesErr) {
-          alert("Erro ao apagar jogos existentes.");
-          return;
-        }
-
-        // Apaga standings
-        const { error: delStdErr } = await supabase
-          .from("standings")
-          .delete()
-          .eq("sport_id", sportId);
-        if (delStdErr) {
-          alert("Erro ao apagar classificação existente.");
-          return;
-        }
-      }
-
-      // 3) Zera grupos de todos os times do esporte (evita resíduos)
-      const { error: clearErr } = await supabase
+      // 1) Limpa grupos/seeds de todos os times do esporte
+      await supabase
         .from("teams")
-        .update({ group_name: null })
+        .update({ group_name: null, seed_in_group: null })
         .eq("sport_id", sportId);
 
-      if (clearErr) {
-        alert("Erro ao limpar grupos dos times.");
-        return;
-      }
-
-      // 4) Define grupo A..H para os IDs escolhidos
+      // 2) Aplica group_name + seed_in_group (1..3) na ORDEM do array de cada grupo
       for (const g of GROUP_KEYS) {
-        if (groups[g].length > 0) {
-          const { error: updErr } = await supabase
-            .from("teams")
-            .update({ group_name: g })
-            .in("id", groups[g]);
-          if (updErr) {
-            alert(`Erro ao atribuir grupo ${g}.`);
-            return;
+        const ids = groups[g];
+        if (ids.length) {
+          // set group_name para os 3
+          await supabase.from("teams").update({ group_name: g }).in("id", ids);
+          // set seed 1..3 na ordem exibida
+          for (let i = 0; i < ids.length; i++) {
+            await supabase.from("teams").update({ seed_in_group: i + 1 }).eq("id", ids[i]);
           }
         }
       }
 
-      // 5) Seeds/standings (zera e recalcula)
-      await supabase.rpc("seed_initial_standings", {
-        p_sport_name: "Pebolim",
-        p_reset: true,
-      });
+      // 3) Standings (zera e prepara)
+      await supabase.rpc("seed_initial_standings", { p_sport_name: "Pebolim", p_reset: true });
       await supabase.rpc("rebuild_standings", { p_sport_name: "Pebolim" });
 
-      // 6) Cria os jogos da fase de grupos
-      const rows = buildGroupMatches(sportId);
-      if (rows.length > 0) {
-        const { error: insErr } = await supabase.from("matches").insert(rows);
-        if (insErr) {
-          console.error("Insert matches error:", insErr);
-          alert(`Erro ao gerar jogos: ${insErr.message}\n${insErr.details ?? ""}`);
-          return;
-        }
+      // 4) Cria partidas de grupos via RPC (ordem certa + order_idx global)
+      const { error: genErr } = await supabase.rpc("admin_generate_group_fixtures_3x3", {
+        p_sport_id: sportId,
+        p_variant: "1v3_1v2_3v2", // variante do Pebolim
+      });
+      if (genErr) {
+        alert("Erro ao gerar jogos de grupos: " + genErr.message);
+        return;
       }
 
-      // 7) (Opcional) Pré-cria slots de quartas/semis/final
+      // 5) Cria slots de mata-mata (quartas/semis/final) conforme regras do Pebolim
       await supabase.rpc("maybe_create_knockout", { p_sport_name: "Pebolim" });
 
-      alert("Grupos confirmados e jogos gerados!");
-      navigate("/admin");
+      // Pronto! A v_queue_slots já mostrará: call = Jogo 1, next = Jogo 2
+      alert("✅ Grupos confirmados e jogos gerados!\n\nVoltando para a tela de campeonatos...");
+      setTimeout(() => navigate("/admin/campeonatos"), 1200);
     } catch (err) {
       alert("Erro ao salvar: " + (err?.message || String(err)));
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -269,12 +209,24 @@ export default function PebolimTournament() {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-xl font-bold">Configuração do Campeonato de Pebolim</h2>
-      <p className="text-sm text-gray-600">
-        Organize os 24 times em 8 grupos de 3. Clique nos times para
-        selecioná-los (ficam escuros). Depois clique no botão de um grupo para
-        mover todos os selecionados.
-      </p>
+      <header className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-bold">Configuração do Campeonato de Pebolim</h2>
+          <p className="text-sm text-gray-600">
+            Organize os 24 times em 8 grupos de 3. Ao confirmar, salvamos{" "}
+            <strong>group_name</strong> e <strong>seed_in_group = 1,2,3</strong> conforme a ordem
+            e geramos os jogos via RPC na <strong>ordem exata</strong>. Assim, o Jogo 1 já aparece
+            em <em>⚠️ Compareçam</em> e o Jogo 2 como <em>Próximo</em>.
+          </p>
+        </div>
+        <button
+          onClick={loadAll}
+          className="text-xs px-3 py-1 rounded border hover:bg-gray-50"
+          title="Recarregar dados"
+        >
+          Recarregar
+        </button>
+      </header>
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         {/* Times disponíveis */}
@@ -288,9 +240,7 @@ export default function PebolimTournament() {
                 <li
                   key={t.id}
                   className={`flex items-center gap-2 p-2 rounded cursor-pointer border ${
-                    selected.has(t.id)
-                      ? "bg-primary text-white"
-                      : "bg-gray-50 hover:bg-gray-100"
+                    selected.has(t.id) ? "bg-blue-600 text-white" : "bg-gray-50 hover:bg-gray-100"
                   }`}
                   onClick={() => toggleSelect(t.id)}
                   title={t.name}
@@ -331,7 +281,7 @@ export default function PebolimTournament() {
                 <div className="text-xs text-gray-500">Nenhum time.</div>
               ) : (
                 <ul className="space-y-1">
-                  {groups[g].map((id) => {
+                  {groups[g].map((id, idx) => {
                     const team = teams.find((t) => t.id === id);
                     return (
                       <li
@@ -341,6 +291,7 @@ export default function PebolimTournament() {
                         title="Clique para remover do grupo"
                       >
                         <div className="flex items-center gap-2">
+                          <span className="text-[10px] w-4 text-gray-500">{idx + 1}</span>
                           <TeamBadge team={team} />
                           <span className="truncate" title={team?.name}>
                             {team?.name}
@@ -360,38 +311,26 @@ export default function PebolimTournament() {
       {/* Rodapé */}
       <div className="flex items-center justify-between gap-4">
         <div className="text-xs text-gray-600">
-          {allGroupsValid ? (
-            <span className="text-green-700">
-              Tudo certo! {TEAMS_PER_GROUP} times em cada grupo.
-            </span>
-          ) : (
-            <span>
-              Complete os grupos:{" "}
-              {GROUP_KEYS.map(
-                (g) => `${g}(${groups[g].length}/${TEAMS_PER_GROUP})`
-              ).join(", ")}
-              .
-            </span>
-          )}
+          {GROUP_KEYS.map((g) => `${g}(${groups[g].length}/${TEAMS_PER_GROUP})`).join(", ")}
         </div>
 
         <button
           onClick={confirmGroups}
-          disabled={!allGroupsValid}
+          disabled={!allGroupsValid || busy}
           className={`px-6 py-2 rounded font-semibold transition ${
-            allGroupsValid
-              ? "bg-primary text-white hover:bg-primary/90"
+            allGroupsValid && !busy
+              ? "bg-blue-600 text-white hover:bg-blue-700"
               : "bg-gray-200 text-gray-500 cursor-not-allowed"
           }`}
         >
-          Confirmar grupos e gerar jogos
+          {busy ? "Processando..." : "Confirmar grupos e gerar jogos"}
         </button>
       </div>
     </div>
   );
 }
 
-/* ======= Badge local para ficar “copia e cola” ======= */
+/* ======= Badge utilitária ======= */
 
 function TeamBadge({ team }) {
   const initials = getInitials(team?.name);

@@ -1,17 +1,25 @@
 import React, { useState } from "react";
 
-// Helpers para avatar de iniciais (extraídos do Rosters.jsx)
+// Helpers
+function ensureString(v, fallback = "") {
+  if (typeof v === "string") return v;
+  if (v === null || v === undefined) return fallback;
+  try { return String(v); } catch { return fallback; }
+}
+
 function getInitials(name) {
-  if (!name) return "?";
-  const parts = name.trim().split(" ");
-  if (parts.length === 1) return parts[0][0]?.toUpperCase();
+  const s = ensureString(name, "").trim();
+  if (!s) return "?";
+  const parts = s.split(/\s+/);
+  if (parts.length === 1) return parts[0][0]?.toUpperCase() || "?";
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
 function stringToColor(str) {
+  const s = ensureString(str, "");
   let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    hash = str.charCodeAt(i) + ((hash << 5) - hash);
+  for (let i = 0; i < s.length; i++) {
+    hash = s.charCodeAt(i) + ((hash << 5) - hash);
   }
   const color = ((hash >>> 0) % 0xffffff).toString(16).padStart(6, "0");
   return `#${color}`;
@@ -20,8 +28,9 @@ function stringToColor(str) {
 export default function TeamBadge({ team, size = 32 }) {
   const [imageError, setImageError] = useState(false);
   
-  const teamName = team?.name || "A definir";
-  const logoUrl = team?.logo_url;
+  // Normaliza tudo para string
+  const teamName = ensureString(team?.name, "A definir");
+  const logoUrl = typeof team?.logo_url === "string" ? team.logo_url : null;
   
   // Se não há URL ou houve erro, mostra fallback
   const showFallback = !logoUrl || imageError;

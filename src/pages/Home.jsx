@@ -3,30 +3,67 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "../supabaseClient";
 import TeamBadge from "../components/TeamBadge";
+import {
+  Trophy,
+  Megaphone,
+  PlayCircle,
+  ChevronsRight,
+  RefreshCw,
+  ChevronRight,
+} from "lucide-react";
 
-// Ícones por esporte (simples e claros)
-const SPORT_ICON = {
-  Futsal: "⚽",
-  Volei: "🏐",
-  FIFA: "🎮⚽",
-  Pebolim: "🎲⚽",
+/**
+ * Home unificada do evento:
+ * - Para cada esporte (Vôlei, Futsal, Pebolim, FIFA):
+ *   (1) "Ao vivo" (se houver), com placar/sets e link para a MatchPage
+ *   (2) Fila com dois cartões fixos: ⚠️ Próxima e Jogo seguinte (com badges e links)
+ *   (3) (opcional) lista compacta de agendados
+ *
+ * Banco esperado:
+ * - View public.v_queue_slots (slots: 'live', 'call', 'next' por esporte)
+ * - Tabela matches com order_idx definido para a fila sequencial
+ * - Events/placares atualizados em match_events → atualizarão home via realtime
+ */
+
+const SPORT_LIST = [
+  { name: "Volei",  label: "Vôlei",   key: "volei",   callText: "⚠️ Compareçam à quadra de Vôlei:" },
+  { name: "Futsal", label: "Futsal",  key: "futsal",  callText: "⚠️ Compareçam à quadra de Futsal:" },
+  { name: "Pebolim",label: "Pebolim", key: "pebolim", callText: "⚠️ Compareçam à mesa de pebolim:" },
+  { name: "FIFA",   label: "FIFA",    key: "fifa",    callText: "⚠️ Compareçam à área do console:" },
+];
+
+const STAGE_LABEL = {
+  grupos: "GRUPOS",
+  oitavas: "OITAVAS",
+  quartas: "QUARTAS",
+  semi: "SEMI",
+  final: "FINAL",
+  "3lugar": "3º LUGAR",
 };
+function toStageLabel(stage) {
+  if (!stage) return null;
+  return STAGE_LABEL[stage] || String(stage).toUpperCase();
+}
 
-// Ordem de exibição das seções por esporte
-const SPORT_ORDER = ["Futsal", "Volei", "FIFA", "Pebolim"];
-
-// Labels do status
-const STATUS_LABEL = {
-  scheduled: "Agendado",
-  ongoing: "Em andamento",
-  paused: "Pausado",
-  finished: "Encerrado",
-};
-
-// Storage
+// Storage: logos dos times
 const LOGO_BUCKET = "team-logos";
+function isHttpUrl(str) {
+  return typeof str === "string" && /^https?:\/\//i.test(str);
+}
+function isStoragePath(str) {
+  return typeof str === "string" && !isHttpUrl(str) && str.trim() !== "";
+}
+function publicLogoUrl(raw) {
+  if (!raw) return null;
+  if (isHttpUrl(raw)) return raw;
+  if (isStoragePath(raw)) {
+    const { data } = supabase.storage.from(LOGO_BUCKET).getPublicUrl(raw);
+    return data?.publicUrl || null;
+  }
+  return null;
+}
 
-// Helpers de data/hora (Campinas, SP)
+// Helpers de tempo para “Ao vivo”
 const tz = "America/Sao_Paulo";
 function fmtDate(dt) {
   if (!dt) return "";
@@ -42,459 +79,216 @@ function fmtDate(dt) {
     return dt;
   }
 }
-
-function isHttpUrl(str) {
-  return typeof str === "string" && /^https?:\/\//i.test(str);
-}
-function isStoragePath(str) {
-  return typeof str === "string" && !isHttpUrl(str) && str.trim() !== "";
-}
-function publicLogoUrl(raw) {
-  if (!raw) return null;
-  if (isHttpUrl(raw)) return raw; // já é pública
-  if (isStoragePath(raw)) {
-    const { data } = supabase.storage.from(LOGO_BUCKET).getPublicUrl(raw);
-    return data?.publicUrl || null;
-  }
-  return null;
-}
-
-// 👉 Considera a partida "definida" apenas se AMBOS os times existem
-function isMatchDefined(m) {
-  const hid = m?.home && typeof m.home === "object" ? m.home.id : null;
-  const aid = m?.away && typeof m.away === "object" ? m.away.id : null;
-  return Boolean(hid && aid);
-}
-
-// Formatar tempo em minutos:segundos baseado no tempo decorrido
 function formatGameTime(match, currentTimestamp) {
-  if (!match || match.status === 'scheduled' || match.status === 'finished') {
+  if (!match || match.status === "scheduled" || match.status === "finished") {
     return "0:00";
   }
-  
   const startTime = new Date(match.starts_at);
-  const currentTime = match.status === 'paused' 
-    ? new Date(match.updated_at) 
-    : new Date(currentTimestamp || Date.now());
-  
-  // Calcula diferença em milissegundos
+  const currentTime =
+    match.status === "paused"
+      ? new Date(match.updated_at)
+      : new Date(currentTimestamp || Date.now());
   const diffMs = currentTime - startTime;
-  
-  // Se a diferença for negativa (jogo ainda não começou), retorna 0:00
   if (diffMs < 0) return "0:00";
-  
-  // Converte para minutos e segundos
   const totalSeconds = Math.floor(diffMs / 1000);
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
-  
-  return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
-
-// Função para obter sets do vôlei
-function getSets(match, side) {
-  const meta = match.meta || {};
+function getVoleiSets(match, side) {
+  const meta = match?.meta || {};
   const key = side === "home" ? "home_sets" : "away_sets";
   return Math.max(0, Number(meta[key] || 0));
 }
 
-// Barra animada para jogos ao vivo/pausados
 function LiveProgressBar({ status }) {
   if (status !== "ongoing" && status !== "paused") return null;
-  
   const isOngoing = status === "ongoing";
   const barColor = isOngoing ? "bg-blue-500" : "bg-orange-500";
   const bgColor = isOngoing ? "bg-blue-100" : "bg-orange-100";
-  
   return (
     <div className={`absolute top-0 left-0 right-0 h-1 ${bgColor} overflow-hidden rounded-t-lg`}>
-      <div 
+      <div
         className={`h-full ${barColor}`}
-        style={{
-          animation: isOngoing 
-            ? 'slideProgress 3s ease-in-out infinite' 
-            : 'none',
-          width: '100%'
-        }}
+        style={{ animation: isOngoing ? "slideProgress 3s ease-in-out infinite" : "none", width: "100%" }}
       />
     </div>
   );
 }
 
-// Pill de status
-function StatusPill({ status, meta }) {
-  const base =
-    "inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium";
-  const style =
-    status === "ongoing"
-      ? "bg-green-100 text-green-700"
-      : status === "paused"
-      ? "bg-yellow-100 text-yellow-700"
-      : status === "finished"
-      ? "bg-gray-200 text-gray-700"
-      : "bg-blue-100 text-blue-700"; // scheduled
-
-  return (
-    <span className={`${base} ${style}`}>
-      {STATUS_LABEL[status] || status}
-    </span>
-  );
-}
-
-// Linha compacta da partida (clique no card → MatchPage; clique no time → TeamPage)
-function MatchRow({ match, currentTimestamp }) {
-  const home = match.home;
-  const away = match.away;
-
-  // Verifica se é vôlei
-  const isVolei = (match.sport?.name || "").toLowerCase() === "volei";
-
-  // Mostrar placar SOMENTE quando o jogo já iniciou (ongoing/paused) ou terminou (finished).
-  const shouldShowScore = match.status !== "scheduled";
-  const homeScore = typeof match.home_score === "number" ? match.home_score : 0;
-  const awayScore = typeof match.away_score === "number" ? match.away_score : 0;
-
-  // Sets para vôlei
-  const homeSets = isVolei ? getSets(match, "home") : 0;
-  const awaySets = isVolei ? getSets(match, "away") : 0;
-
-  const isLive = match.status === "ongoing" || match.status === "paused";
-  const cardBorder = isLive 
-    ? match.status === "ongoing" 
-      ? "border-blue-200" 
-      : "border-orange-200"
-    : "border-gray-200";
-
-  return (
-    <Link
-      to={`/match/${match.id}`}
-      className={`block border rounded-lg p-3 bg-white hover:bg-gray-50 transition shadow-sm relative overflow-hidden ${cardBorder}`}
-    >
-      <LiveProgressBar status={match.status} />
-      
-      <div className="flex items-start justify-between">
-        <div className="flex items-center gap-2">
-          <StatusPill status={match.status} meta={match.meta} />
-          {isLive && (
-            <span className="inline-flex items-center gap-1 text-[11px] font-medium text-gray-600">
-              🕐 {formatGameTime(match, currentTimestamp)}
-            </span>
-          )}
-          <span className="text-[11px] text-gray-500">
-            {SPORT_ICON[match.sport?.name] || "🏆"} {match.sport?.name}
-          </span>
-        </div>
-        {match.starts_at ? (
-          <span className="text-[11px] text-gray-500">{fmtDate(match.starts_at)}</span>
-        ) : (
-          <span className="text-[11px] text-gray-400">{match.venue || ""}</span>
-        )}
-      </div>
-
-      <div className="mt-2 flex items-center gap-3">
-        {/* Home */}
-        <div className="flex items-center gap-2 min-w-0 flex-1">
-          <TeamBadge team={home || { name: "A definir" }} size={28} />
-          <Link
-            to={home?.id ? `/team/${home.id}` : "#"}
-            onClick={(e) => {
-              if (!home?.id) e.preventDefault();
-              e.stopPropagation();
-            }}
-            className={`truncate text-sm font-medium hover:underline ${
-              home?.id ? "text-gray-900" : "text-gray-400 pointer-events-none"
-            }`}
-            title={home?.name || "A definir"}
-          >
-            {home?.name || "A definir"}
-          </Link>
-        </div>
-
-        {/* Placar */}
-        <div className="shrink-0 text-center">
-          {shouldShowScore ? (
-            <div className="space-y-1">
-              {/* Sets para vôlei */}
-              {isVolei && (
-                <div className="text-xs font-medium text-gray-600">
-                  <span className="tabular-nums">{homeSets}</span>
-                  <span className="text-gray-400 mx-1">sets</span>
-                  <span className="tabular-nums">{awaySets}</span>
-                </div>
-              )}
-              {/* Pontos */}
-              <div className="font-bold text-lg tabular-nums">
-                {homeScore} <span className="text-gray-400">x</span> {awayScore}
-              </div>
-            </div>
-          ) : null}
-          <div className="text-[10px] text-gray-400 uppercase tracking-wide">
-            {match.stage || ""}
-            {match.round ? ` · J${match.round}` : ""}
-            {match.group_name ? ` · G${match.group_name}` : ""}
-          </div>
-        </div>
-
-        {/* Away */}
-        <div className="flex items-center gap-2 min-w-0 flex-1 justify-end">
-          <Link
-            to={away?.id ? `/team/${away.id}` : "#"}
-            onClick={(e) => {
-              if (!away?.id) e.preventDefault();
-              e.stopPropagation();
-            }}
-            className={`truncate text-sm font-medium hover:underline text-right ${
-              away?.id ? "text-gray-900" : "text-gray-400 pointer-events-none"
-            }`}
-            title={away?.name || "A definir"}
-          >
-            {away?.name || "A definir"}
-          </Link>
-          <TeamBadge team={away || { name: "A definir" }} size={28} />
-        </div>
-      </div>
-
-      {/* Rodapé opcional */}
-      <div className="mt-2 flex items-center justify-between text-[11px] text-gray-500">
-        <span className="truncate">{match.venue || ""}</span>
-        {match.status === "finished" && match.updated_at ? (
-          <span>Encerrado em {fmtDate(match.updated_at)}</span>
-        ) : null}
-      </div>
-    </Link>
-  );
-}
-
-// Grade de partidas por status para um esporte
-function SportSection({ sportName, matches, currentTimestamp }) {
-  const icon = SPORT_ICON[sportName] || "🏆";
-
-  // 👉 Aparece somente se ambos os times estiverem definidos
-  const onlyDefined = (m) => isMatchDefined(m);
-
-  const scheduled = matches
-    .filter((m) => m.status === "scheduled" && onlyDefined(m))
-    .sort((a, b) =>
-      a.starts_at && b.starts_at
-        ? new Date(a.starts_at) - new Date(b.starts_at)
-        : a.starts_at
-        ? -1
-        : b.starts_at
-        ? 1
-        : 0
-    )
-    .slice(0, 8); // próximos
-
-  const finished = matches
-    .filter((m) => m.status === "finished" && onlyDefined(m))
-    .sort(
-      (a, b) =>
-        new Date(b.updated_at || b.starts_at || 0) -
-        new Date(a.updated_at || a.starts_at || 0)
-    )
-    .slice(0, 10); // recentes
-
-  const SectionBlock = ({ title, items, emptyLabel }) => (
-    <div className="space-y-2">
-      <h4 className="text-sm font-semibold text-gray-700">{title}</h4>
-      {items.length === 0 ? (
-        <div className="text-xs text-gray-500">{emptyLabel}</div>
-      ) : (
-        <div className="grid md:grid-cols-2 gap-3">
-          {items.map((m) => (
-            <MatchRow key={m.id} match={m} currentTimestamp={currentTimestamp} />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-
-  return (
-    <section className="space-y-4">
-      <div className="flex items-center gap-2">
-        <span className="text-xl">{icon}</span>
-        <h3 className="text-lg font-bold">{sportName}</h3>
-      </div>
-
-      <div className="space-y-6">
-        <SectionBlock
-          title="Agendados"
-          items={scheduled}
-          emptyLabel="Nenhuma partida agendada."
-        />
-        <SectionBlock
-          title="Encerrados (recentes)"
-          items={finished}
-          emptyLabel="Sem resultados recentes."
-        />
-      </div>
-    </section>
-  );
-}
-
 export default function Home() {
+  const [blocks, setBlocks] = useState({});
   const [loading, setLoading] = useState(true);
-  const [bySport, setBySport] = useState({}); // { "Futsal": [matches...], ... }
-  const [currentTimestamp, setCurrentTimestamp] = useState(Date.now());
-  const channelRef = useRef(null);
-  const timerRef = useRef(null);
+  const [flash, setFlash] = useState(null);
+  const [now, setNow] = useState(Date.now());
+  const mountedRef = useRef(true);
+  const reloadingRef = useRef(false);
 
-  // Carrega todas as partidas com infos de time e esporte
-  const loadAll = async () => {
+  const load = async () => {
+    if (reloadingRef.current) return;
+    reloadingRef.current = true;
     setLoading(true);
+    setFlash(null);
 
-    const { data, error } = await supabase
-      .from("matches")
-      .select(`
-        id,
-        sport:sport_id ( id, name ),
-        stage, round, group_name,
-        starts_at, updated_at, venue, status, meta,
-        home_score, away_score,
-        home:home_team_id ( id, name, logo_url, color ),
-        away:away_team_id ( id, name, logo_url, color )
-      `)
-      .order("starts_at", { ascending: true, nullsFirst: true });
+    try {
+      // 1) Esportes existentes
+      const { data: sportsRows, error: sportsErr } = await supabase
+        .from("sports")
+        .select("id,name");
+      if (sportsErr) throw sportsErr;
 
-    if (error) {
-      console.error(error);
-      setBySport({});
+      const byName = new Map((sportsRows || []).map((s) => [s.name, s.id]));
+      const active = SPORT_LIST.filter((s) => byName.has(s.name)).map((s) => ({
+        ...s,
+        sportId: byName.get(s.name),
+      }));
+
+      // 2) Para cada esporte, obter slots na fila e “hidratar” com matches + teams
+      const results = await Promise.all(
+        active.map(async (sp) => {
+          // slots live/call/next
+          const { data: slots, error: slotsErr } = await supabase
+            .from("v_queue_slots")
+            .select("slot, order_idx, match_id, stage, group_name")
+            .eq("sport_id", sp.sportId);
+          if (slotsErr) throw slotsErr;
+
+          const bySlot = Object.fromEntries((slots || []).map((r) => [r.slot, r]));
+          const ids = (slots || []).map((s) => s.match_id).filter(Boolean);
+
+          // detalhes completos (matches + teams) para slots
+          let details = {};
+          if (ids.length) {
+            const { data: det } = await supabase
+              .from("matches")
+              .select(`
+                id, order_idx, stage, group_name, status, starts_at, updated_at, venue, meta,
+                home_score, away_score,
+                home:home_team_id ( id, name, logo_url, color ),
+                away:away_team_id ( id, name, logo_url, color ),
+                sport:sport_id ( id, name )
+              `)
+              .in("id", ids);
+
+            const normalized = (det || []).map((m) => {
+              const home = m.home && typeof m.home === "object"
+                ? { ...m.home, logo_url: normalizeLogo(m.home.logo_url) }
+                : m.home;
+              const away = m.away && typeof m.away === "object"
+                ? { ...m.away, logo_url: normalizeLogo(m.away.logo_url) }
+                : m.away;
+              return { ...m, home, away };
+            });
+            details = Object.fromEntries(normalized.map((d) => [d.id, d]));
+          }
+
+          // 3) Lista compacta extra de agendados (com times) – os 6 próximos
+          const ignoreIds = [bySlot.call?.match_id, bySlot.next?.match_id].filter(Boolean);
+          const { data: upcoming } = await supabase
+            .from("matches")
+            .select(`
+              id, order_idx, stage, group_name, status,
+              home:home_team_id ( id, name, logo_url, color ),
+              away:away_team_id ( id, name, logo_url, color )
+            `)
+            .eq("sport_id", sp.sportId)
+            .eq("status", "scheduled")
+            .not("order_idx", "is", null)
+            .order("order_idx", { ascending: true })
+            .limit(10);
+
+          const compactUpcoming = (upcoming || [])
+            .filter((u) => !ignoreIds.includes(u.id))
+            .slice(0, 6)
+            .map((u) => ({
+              id: u.id,
+              order_idx: u.order_idx,
+              stage: u.stage,
+              group_name: u.group_name,
+              home: u.home ? { ...u.home, logo_url: normalizeLogo(u.home.logo_url) } : null,
+              away: u.away ? { ...u.away, logo_url: normalizeLogo(u.away.logo_url) } : null,
+            }));
+
+          return [
+            sp.key,
+            {
+              ...sp,
+              slots: bySlot,
+              details,          // match_id -> match completo (com teams e placar/sets)
+              compactUpcoming,  // lista pequena de próximos
+            },
+          ];
+        })
+      );
+
+      setBlocks(Object.fromEntries(results));
+    } catch (e) {
+      setFlash(`Falha ao carregar a Home: ${e.message || e}`);
+    } finally {
       setLoading(false);
-      return;
+      reloadingRef.current = false;
     }
-
-    // Normaliza os logos (transforma caminho do storage em URL pública)
-    const normalized = (data || []).map((m) => {
-      const home =
-        m.home && typeof m.home === "object"
-          ? {
-              ...m.home,
-              logo_url: (() => {
-                const url = publicLogoUrl(m.home.logo_url);
-                return url ? `${url}${url.includes("?") ? "&" : "?"}v=1` : null;
-              })(),
-            }
-          : m.home;
-
-      const away =
-        m.away && typeof m.away === "object"
-          ? {
-              ...m.away,
-              logo_url: (() => {
-                const url = publicLogoUrl(m.away.logo_url);
-                return url ? `${url}${url.includes("?") ? "&" : "?"}v=1` : null;
-              })(),
-            }
-          : m.away;
-
-      return { ...m, home, away };
-    });
-
-    // Agrupa por esporte (nome)
-    const grouped = {};
-    for (const m of normalized) {
-      const sportName = m.sport?.name || "Outros";
-      if (!grouped[sportName]) grouped[sportName] = [];
-      grouped[sportName].push(m);
-    }
-    setBySport(grouped);
-    setLoading(false);
   };
 
   useEffect(() => {
-    loadAll();
+    mountedRef.current = true;
+    load();
 
-    // Timer para atualizar o timestamp a cada segundo
-    timerRef.current = setInterval(() => {
-      setCurrentTimestamp(Date.now());
-    }, 1000);
+    // timer p/ clock “Ao vivo”
+    const t = setInterval(() => setNow(Date.now()), 1000);
 
-    // Realtime: qualquer mudança em matches recarrega a home
-    if (channelRef.current) {
-      supabase.removeChannel(channelRef.current);
-    }
-    const channel = supabase
-      .channel("home-matches")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "matches" },
-        () => loadAll()
-      )
+    // realtime: mudanças em matches e match_events → recarrega
+    const ch = supabase
+      .channel("home-central")
+      .on("postgres_changes", { event: "*", schema: "public", table: "matches" }, () => mountedRef.current && load())
+      .on("postgres_changes", { event: "*", schema: "public", table: "match_events" }, () => mountedRef.current && load())
       .subscribe();
-    channelRef.current = channel;
 
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-      if (channelRef.current) supabase.removeChannel(channelRef.current);
-      channelRef.current = null;
+      mountedRef.current = false;
+      clearInterval(t);
+      supabase.removeChannel(ch);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Lista de esportes na ordem desejada; adiciona extras no final, se existirem
-  const sportNames = useMemo(() => {
-    const present = Object.keys(bySport);
-    const ordered = SPORT_ORDER.filter((n) => present.includes(n));
-    const extras = present.filter((n) => !SPORT_ORDER.includes(n)).sort();
-    return [...ordered, ...extras];
-  }, [bySport]);
-
-  // Separar jogos ao vivo/pausados de todos os esportes
-  const liveMatches = useMemo(() => {
-    const allMatches = Object.values(bySport).flat();
-    return allMatches
-      .filter((m) => (m.status === "ongoing" || m.status === "paused") && isMatchDefined(m))
-      .sort((a, b) => {
-        // Priorizar ongoing sobre paused
-        if (a.status === "ongoing" && b.status === "paused") return -1;
-        if (a.status === "paused" && b.status === "ongoing") return 1;
-        return 0;
-      });
-  }, [bySport]);
+  const orderedKeys = useMemo(
+    () => SPORT_LIST.map((s) => s.key).filter((k) => blocks[k]),
+    [blocks]
+  );
 
   return (
-    <div className="space-y-10">
-      <header className="space-y-1">
-        <h2 className="text-2xl font-bold">Acompanhe as partidas</h2>
-        <p className="text-sm text-gray-600">
-          Toque em uma partida para ver os detalhes. Toque no nome do time para ir à página do time.
-        </p>
-      </header>
+    <div className="mx-auto max-w-7xl px-4 py-6 sm:py-8">
+      {/* Header */}
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Trophy className="h-6 w-6 text-blue-600" />
+          <h1 className="text-2xl font-bold tracking-tight">Central do Evento</h1>
+        </div>
+        <button
+          onClick={load}
+          className="inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+          title="Recarregar agora"
+        >
+          <RefreshCw className="h-4 w-4" />
+          Atualizar
+        </button>
+      </div>
+
+      {flash && (
+        <div className="mb-5 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          {flash}
+        </div>
+      )}
 
       {loading ? (
-        <div className="space-y-4">
-          <div className="h-6 w-40 bg-gray-200 rounded animate-pulse" />
-          <div className="grid md:grid-cols-2 gap-3">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <div key={i} className="h-20 bg-gray-100 rounded animate-pulse" />
-            ))}
-          </div>
-        </div>
+        <HomeSkeleton />
       ) : (
-        <>
-          {/* Seção de jogos ao vivo/pausados sempre no topo */}
-          {liveMatches.length > 0 && (
-            <section className="space-y-4">
-              <div className="flex items-center gap-2">
-                <span className="text-xl">🔴</span>
-                <h3 className="text-lg font-bold">Ao vivo / Pausado</h3>
-              </div>
-              <div className="grid md:grid-cols-2 gap-3">
-                {liveMatches.map((m) => (
-                  <MatchRow key={m.id} match={m} currentTimestamp={currentTimestamp} />
-                ))}
-              </div>
-            </section>
-          )}
-
-          {/* Seções por esporte (apenas agendados e encerrados) */}
-          {sportNames.length === 0 ? (
-            <p className="text-sm text-gray-500">Nenhuma partida disponível no momento.</p>
-          ) : (
-            sportNames.map((name) => (
-              <SportSection key={name} sportName={name} matches={bySport[name] || []} currentTimestamp={currentTimestamp} />
-            ))
-          )}
-        </>
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+          {orderedKeys.map((key) => (
+            <SportBlock key={key} block={blocks[key]} now={now} />
+          ))}
+        </div>
       )}
 
       <style jsx global>{`
@@ -506,4 +300,300 @@ export default function Home() {
       `}</style>
     </div>
   );
+}
+
+/* ---------------------- COMPONENTES ---------------------- */
+
+function SportBlock({ block, now }) {
+  const { label, callText, slots, details, compactUpcoming } = block || {};
+  const live = slots?.live?.match_id ? details?.[slots.live.match_id] : null;
+  const call = slots?.call?.match_id ? details?.[slots.call.match_id] : null;
+  const next = slots?.next?.match_id ? details?.[slots.next.match_id] : null;
+
+  return (
+    <div className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+      <div className="flex items-center justify-between gap-3 p-4 sm:p-5">
+        <div className="flex items-center gap-2">
+          <span className="text-lg font-semibold">{label}</span>
+        </div>
+      </div>
+
+      {/* Ao vivo */}
+      <div className="px-4 sm:px-5">
+        <div className="rounded-xl border border-red-200 bg-red-50 p-4">
+          <div className="mb-2 flex items-center justify-between">
+            <div className="flex items-center gap-2 text-sm font-medium text-red-800">
+              <PlayCircle className="h-4 w-4" />
+              {live ? (
+                <Link to={`/match/${live.id}`} className="hover:underline">
+                  Ao vivo — Jogo {live.order_idx}
+                  {live.group_name ? ` • Grupo ${live.group_name}` : ""}
+                </Link>
+              ) : (
+                <span>Ao vivo</span>
+              )}
+            </div>
+            {live?.stage ? (
+              <StagePill stage={live.stage} />
+            ) : (
+              <span className="text-xs text-red-700/70">Aguardando…</span>
+            )}
+          </div>
+
+          {live ? (
+            <LiveScoreRow match={live} now={now} />
+          ) : (
+            <div className="text-sm text-gray-600">Nenhuma partida ao vivo no momento.</div>
+          )}
+        </div>
+      </div>
+
+      {/* Fila: Próxima (⚠️) e Seguinte */}
+      <div className="px-4 pb-4 sm:px-5 sm:pb-5">
+        <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+          <QueueCard
+            tone="amber"
+            icon={<Megaphone className="h-4 w-4" />}
+            title="Próxima partida"
+            subtitle={callText}
+            match={call}
+          />
+          <QueueCard
+            tone="emerald"
+            icon={<ChevronsRight className="h-4 w-4" />}
+            title="Jogo seguinte"
+            subtitle="Na sequência:"
+            match={next}
+          />
+        </div>
+      </div>
+
+      {/* Compacto: mais agendados (opcional, aparece só se houver) */}
+      {compactUpcoming?.length ? (
+        <div className="border-t px-4 py-3 sm:px-5">
+          <div className="mb-2 text-sm font-semibold text-gray-800">Agendados (próximos)</div>
+          <div className="grid grid-cols-1 gap-2">
+          {compactUpcoming.map((u) => (
+            <Link
+              key={u.id}
+              to={`/match/${u.id}`}
+              className="flex items-center justify-between rounded-lg border bg-gray-50 px-3 py-2 hover:bg-gray-100"
+            >
+              <div className="min-w-0">
+                <div className="truncate text-sm font-medium text-gray-900">
+                  Jogo {u.order_idx}
+                  {u.group_name ? ` • Grupo ${u.group_name}` : ""}
+                </div>
+                <div className="mt-1 flex items-center gap-2 text-xs text-gray-700">
+                  <TeamWithName team={u.home} size={20} allowLink={false} />
+                  <span className="text-gray-400">x</span>
+                  <TeamWithName team={u.away} size={20} align="right" allowLink={false} />
+                </div>
+              </div>
+              <div className="ml-3 shrink-0">
+                <StagePill stage={u.stage} />
+              </div>
+            </Link>
+          ))}
+
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function StagePill({ stage }) {
+  const lbl = toStageLabel(stage);
+  if (!lbl) return null;
+  return (
+    <span className="inline-flex items-center rounded-full border border-gray-300 bg-white px-2 py-0.5 text-[10px] font-semibold tracking-wide text-gray-700">
+      {lbl}
+    </span>
+  );
+}
+
+/* ---------- Cards ---------- */
+
+function LiveScoreRow({ match, now }) {
+  const isVolei = (match?.sport?.name || "").toLowerCase().includes("vole");
+  const showScore = match.status !== "scheduled";
+  const homeScore = Number(match?.home_score ?? 0);
+  const awayScore = Number(match?.away_score ?? 0);
+  const homeSets = isVolei ? getVoleiSets(match, "home") : 0;
+  const awaySets = isVolei ? getVoleiSets(match, "away") : 0;
+
+  return (
+    <Link to={`/match/${match.id}`} className="block rounded-xl bg-white p-3 shadow-sm hover:bg-gray-50 relative overflow-hidden">
+      <LiveProgressBar status={match.status} />
+
+      <div className="mb-2 flex items-center justify-between text-xs text-gray-500">
+        <div className="flex items-center gap-2">
+          {match.group_name ? <span>Grupo {match.group_name}</span> : <span />}
+          {match.venue ? <span className="text-gray-400">• {match.venue}</span> : null}
+        </div>
+        {(match.status === "ongoing" || match.status === "paused") && (
+          <span className="inline-flex items-center gap-1 text-[11px] font-medium text-gray-600">
+            🕐 {formatGameTime(match, now)}
+          </span>
+        )}
+      </div>
+
+      <div className="flex items-center justify-between gap-3">
+        <TeamLine team={match.home} align="left" />
+        <div className="shrink-0 text-center">
+          {isVolei && (
+            <div className="text-[11px] font-semibold text-gray-600 tabular-nums">
+              {homeSets} <span className="text-gray-400">sets</span> {awaySets}
+            </div>
+          )}
+          {showScore ? (
+            <div className="text-xl font-bold tabular-nums">
+              {homeScore} <span className="text-gray-400">x</span> {awayScore}
+            </div>
+          ) : (
+            <div className="text-sm text-gray-400">—</div>
+          )}
+        </div>
+        <TeamLine team={match.away} align="right" />
+      </div>
+    </Link>
+  );
+}
+
+function QueueCard({ tone, icon, title, subtitle, match }) {
+  const toneClasses =
+    tone === "amber"
+      ? "border-amber-200 bg-amber-50"
+      : tone === "emerald"
+      ? "border-emerald-200 bg-emerald-50"
+      : "border-gray-200 bg-gray-50";
+
+  return (
+    <div className={`rounded-xl border ${toneClasses} p-3 sm:p-4`}>
+      <div className="mb-1 flex items-center justify-between">
+        <div className="flex items-center gap-2 text-sm font-semibold text-gray-900">
+          {icon}
+          <span>{title}</span>
+        </div>
+        {match?.stage ? <StagePill stage={match.stage} /> : null}
+      </div>
+
+      <div className="text-xs text-gray-600">{subtitle}</div>
+
+      <div className="mt-2">
+        {match ? (
+          <>
+            <div className="text-sm font-medium text-gray-900">
+              <Link to={`/match/${match.id}`} className="hover:underline">
+                Jogo {match.order_idx}
+                {match.group_name ? ` • Grupo ${match.group_name}` : ""}
+              </Link>
+            </div>
+
+            <div className="mt-1 flex items-center justify-between gap-2">
+              <TeamWithName team={match.home} />
+              <span className="px-1 text-gray-400">x</span>
+              <TeamWithName team={match.away} align="right" />
+            </div>
+
+            <div className="mt-2 text-[11px] text-gray-500 flex items-center justify-between">
+              <span className="truncate">{match.venue || ""}</span>
+
+              {/* 👉 AGORA É LINK CLICÁVEL */}
+              <Link
+                to={`/match/${match.id}`}
+                className="inline-flex items-center gap-1 text-blue-600 hover:underline"
+              >
+                Ver partida <ChevronRight className="h-3.5 w-3.5" />
+              </Link>
+            </div>
+          </>
+        ) : (
+          <div className="text-sm text-gray-500">Aguardando…</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ---------- Itens com badge e link ---------- */
+
+function TeamWithName({ team, size = 24, align = "left", allowLink = true }) {
+  const content = (
+    <>
+      <TeamBadge team={team || { name: "A definir" }} size={size} />
+      <span className={`truncate text-sm ${align === "right" ? "text-right" : ""}`}>
+        {team?.name || "A definir"}
+      </span>
+    </>
+  );
+
+  if (!allowLink || !team?.id) {
+    return (
+      <div className={`min-w-0 flex items-center gap-2 ${align === "right" ? "justify-end" : ""}`}>
+        {content}
+      </div>
+    );
+  }
+
+  return (
+    <Link
+      to={`/team/${team.id}`}
+      className={`min-w-0 flex items-center gap-2 ${align === "right" ? "justify-end" : ""} hover:underline`}
+      title={team?.name}
+      onClick={(e) => e.stopPropagation()}
+    >
+      {content}
+    </Link>
+  );
+}
+
+function TeamLine({ team, align = "left" }) {
+  return (
+    <div className={`flex items-center ${align === "right" ? "justify-end" : ""} gap-2 min-w-0 flex-1`}>
+      {align !== "right" && <TeamBadge team={team || { name: "A definir" }} size={36} />}
+      {team?.id ? (
+        <Link
+          to={`/team/${team.id}`}
+          className={`truncate text-sm font-medium hover:underline ${align === "right" ? "text-right" : "text-left"}`}
+          title={team?.name}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {team?.name || "A definir"}
+        </Link>
+      ) : (
+        <span className={`truncate text-sm ${align === "right" ? "text-right text-gray-400" : "text-gray-400"}`}>
+          A definir
+        </span>
+      )}
+      {align === "right" && <TeamBadge team={team || { name: "A definir" }} size={36} />}
+    </div>
+  );
+}
+
+/* ---------- Skeleton ---------- */
+
+function HomeSkeleton() {
+  return (
+    <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+      {Array.from({ length: 4 }).map((_, i) => (
+        <div key={i} className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+          <div className="mb-3 h-6 w-40 animate-pulse rounded bg-gray-100" />
+          <div className="mb-3 h-24 animate-pulse rounded bg-red-100/60" />
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <div className="h-20 animate-pulse rounded bg-amber-100/60" />
+            <div className="h-20 animate-pulse rounded bg-emerald-100/60" />
+          </div>
+          <div className="mt-3 h-16 animate-pulse rounded bg-gray-100" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ---------- Utils ---------- */
+function normalizeLogo(raw) {
+  const url = publicLogoUrl(raw);
+  return url ? `${url}${url.includes("?") ? "&" : "?"}v=1` : null;
 }

@@ -16,28 +16,14 @@ export default function RouterGuard({ children }) {
       }
     };
 
-    // Intercepta popstate (botão voltar/avançar do navegador)
-    const handlePopState = (e) => {
-      console.log('Navigation detected:', location.pathname);
-    };
-
-    // Intercepta mudanças de hash
-    const handleHashChange = (e) => {
-      console.log('Hash change detected');
-    };
-
     // Adiciona listeners
     window.addEventListener('beforeunload', handleBeforeUnload);
-    window.addEventListener('popstate', handlePopState);
-    window.addEventListener('hashchange', handleHashChange);
 
-    // Garantir que o scroll volte ao topo ao navegar
+    // Garantir que o scroll volte ao topo ao navegar (opcional)
     window.scrollTo(0, 0);
 
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
-      window.removeEventListener('popstate', handlePopState);
-      window.removeEventListener('hashchange', handleHashChange);
     };
   }, [location]);
 
@@ -57,5 +43,6 @@ export default function RouterGuard({ children }) {
     };
   }, [location.pathname]);
 
+  // Renderiza os children diretamente sem loading
   return children;
 }

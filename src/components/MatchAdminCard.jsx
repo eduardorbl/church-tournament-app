@@ -193,21 +193,21 @@ export default function MatchAdminCard({ match }) {
               +1 {homeName}
             </button>
             <button
-              disabled={busy || status !== 'live'}
+              disabled={busy || status !== 'ongoing'}
               onClick={() => addPoint('away', 1)}
               className="bg-blue-600 text-white px-3 py-2 rounded disabled:opacity-50"
             >
               +1 {awayName}
             </button>
             <button
-              disabled={busy || status !== 'live' || score.home === 0}
+              disabled={busy || status !== 'ongoing' || score.home === 0}
               onClick={() => removePoint('home')}
               className="bg-gray-200 px-3 py-2 rounded disabled:opacity-50"
             >
               −1 {homeName}
             </button>
             <button
-              disabled={busy || status !== 'live' || score.away === 0}
+              disabled={busy || status !== 'ongoing' || score.away === 0}
               onClick={() => removePoint('away')}
               className="bg-gray-200 px-3 py-2 rounded disabled:opacity-50"
             >
@@ -226,7 +226,7 @@ export default function MatchAdminCard({ match }) {
               </button>
             )}
 
-            {status === 'live' && (
+            {status === 'ongoing' && (
               <>
                 <button
                   onClick={endMatch}

@@ -1,30 +1,52 @@
 // src/pages/Pebolim.jsx
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "../supabaseClient";
 import TeamBadge from "../components/TeamBadge";
 
-/* ============================
-   Constantes e utilitários
-   ============================ */
+/* ──────────────────────────────────────────────────────────────────────────────
+   Hub Pebolim — Estrutura visual
+   1) Classificação (se houver grupos)
+   2) Chaveamento (sempre visível, com placeholders)
+   3) Jogos agendados (lista integral, com filtros opcionais)
+   4) Regulamento
+   ────────────────────────────────────────────────────────────────────────────── */
 
-const SPORT_ICON = "🎮";
-
-// Storage
+const SPORT_LABEL = "Pebolim";
+const SPORT_ICON = "🎯";
 const LOGO_BUCKET = "team-logos";
-
-const STATUS_LABEL = {
-  scheduled: "Agendado",
-  ongoing: "Em andamento",
-  paused: "Pausado",
-  finished: "Encerrado",
-};
-
 const tz = "America/Sao_Paulo";
+
+const STAGE_FRIENDLY = {
+  grupos: "Grupos",
+  oitavas: "Oitavas",
+  quartas: "Quartas",
+  semi: "Semifinal",
+  final: "Final",
+  "3lugar": "3º lugar",
+};
+const friendlyStage = (s) => (s ? STAGE_FRIENDLY[s] || s : "");
+
+/* ── Datas seguras ─────────────────────────────────────────────────────────── */
+function parseDateSafe(dt) {
+  if (!dt) return null;
+  if (dt instanceof Date) return isNaN(dt.getTime()) ? null : dt;
+  if (typeof dt === "number") return new Date(dt);
+  if (typeof dt === "string") {
+    let s = dt.trim();
+    if (/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(:\d{2})?$/.test(s)) s = s.replace(/\s+/, "T");
+    let d = new Date(s);
+    if (!isNaN(d.getTime())) return d;
+    d = new Date(`${s}Z`);
+    if (!isNaN(d.getTime())) return d;
+  }
+  return null;
+}
 function fmtDate(dt) {
-  if (!dt) return "";
+  const d = parseDateSafe(dt);
+  if (!d) return "";
   try {
-    return new Date(dt).toLocaleString("pt-BR", {
+    return d.toLocaleString("pt-BR", {
       timeZone: tz,
       day: "2-digit",
       month: "2-digit",
@@ -32,329 +54,152 @@ function fmtDate(dt) {
       minute: "2-digit",
     });
   } catch {
-    return dt;
+    return "";
   }
 }
+const ts = (x) => {
+  const d = parseDateSafe(x);
+  return d ? d.getTime() : Number.POSITIVE_INFINITY;
+};
 
-function isHttpUrl(str) {
-  return typeof str === "string" && /^https?:\/\//i.test(str);
-}
-function isStoragePath(str) {
-  return typeof str === "string" && !isHttpUrl(str) && str.trim() !== "";
-}
+/* ── Logos ─────────────────────────────────────────────────────────────────── */
+const isHttpUrl = (str) => typeof str === "string" && /^https?:\/\//i.test(str);
+const isStoragePath = (str) => typeof str === "string" && !isHttpUrl(str) && str.trim() !== "";
 function publicLogoUrl(raw) {
   if (!raw) return null;
-  if (isHttpUrl(raw)) return raw; // já é pública
+  if (isHttpUrl(raw)) return raw;
   if (isStoragePath(raw)) {
     const { data } = supabase.storage.from(LOGO_BUCKET).getPublicUrl(raw);
     return data?.publicUrl || null;
   }
   return null;
 }
+const normalizeLogo = (raw) => {
+  const url = publicLogoUrl(raw);
+  return url ? `${url}${url.includes("?") ? "&" : "?"}v=1` : null;
+};
 
-// Formatar tempo em minutos:segundos baseado no tempo decorrido
-function formatGameTime(match, currentTimestamp) {
-  if (!match || match.status === 'scheduled' || match.status === 'finished') {
-    return "0:00";
+/* ── UI: Título compacto ───────────────────────────────────────────────────── */
+function TitleLine({ order_idx, stage, group_name }) {
+  const chips = [];
+  if (order_idx !== undefined && order_idx !== null && String(order_idx).length) chips.push(`Jogo ${order_idx}`);
+  if (group_name) chips.push(`Grupo ${group_name}`);
+  else if (stage) chips.push(friendlyStage(stage));
+  return <div className="mb-1 text-sm font-semibold text-gray-900">{chips.join(" • ") || "—"}</div>;
+}
+
+/* ── UI: TeamChip ──────────────────────────────────────────────────────────── */
+function TeamChip({ team, align = "left", badge = 28 }) {
+  // normaliza nome para string SEMPRE
+  const displayName = (() => {
+    const n = team?.name;
+    if (typeof n === "string") return n;
+    if (n && typeof n === "object" && "name" in n) return String(n.name);
+    try { return String(n ?? "A definir"); } catch { return "A definir"; }
+  })();
+
+  const has = Boolean(team?.id);
+  const content = (
+    <>
+      {align === "right" ? null : (
+        <TeamBadge team={{ ...(team || {}), name: displayName }} size={badge} />
+      )}
+      <span
+        className={`truncate ${has ? "text-gray-900" : "text-gray-400"} ${align === "right" ? "text-right" : ""}`}
+        title={displayName}
+      >
+        {displayName}
+      </span>
+      {align === "right" ? (
+        <TeamBadge team={{ ...(team || {}), name: displayName }} size={badge} />
+      ) : null}
+    </>
+  );
+
+  if (!has) {
+    return (
+      <div className={`min-w-0 flex items-center gap-2 ${align === "right" ? "justify-end" : ""}`}>
+        {content}
+      </div>
+    );
   }
-  
-  const startTime = new Date(match.starts_at);
-  const currentTime = match.status === 'paused' 
-    ? new Date(match.updated_at) 
-    : new Date(currentTimestamp || Date.now());
-  
-  // Calcula diferença em milissegundos
-  const diffMs = currentTime - startTime;
-  
-  // Se a diferença for negativa (jogo ainda não começou), retorna 0:00
-  if (diffMs < 0) return "0:00";
-  
-  // Converte para minutos e segundos
-  const totalSeconds = Math.floor(diffMs / 1000);
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
-  
-  return `${minutes}:${seconds.toString().padStart(2, '0')}`;
-}
-
-// Barra animada para jogos ao vivo/pausados
-function LiveProgressBar({ status }) {
-  if (status !== "ongoing" && status !== "paused") return null;
-  
-  const isOngoing = status === "ongoing";
-  const barColor = isOngoing ? "bg-blue-500" : "bg-orange-500";
-  const bgColor = isOngoing ? "bg-blue-100" : "bg-orange-100";
-  
-  return (
-    <div className={`absolute top-0 left-0 right-0 h-1 ${bgColor} overflow-hidden rounded-t-lg`}>
-      <div 
-        className={`h-full ${barColor}`}
-        style={{
-          animation: isOngoing 
-            ? 'slideProgress 3s ease-in-out infinite' 
-            : 'none',
-          width: '100%'
-        }}
-      />
-    </div>
-  );
-}
-
-/* ============================
-   UI: Pílula de status
-   ============================ */
-
-function StatusPill({ status, meta }) {
-  const base =
-    "inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium";
-  const style =
-    status === "ongoing"
-      ? "bg-green-100 text-green-700"
-      : status === "paused"
-      ? "bg-yellow-100 text-yellow-700"
-      : status === "finished"
-      ? "bg-gray-200 text-gray-700"
-      : "bg-blue-100 text-blue-700";
-
-  return (
-    <span className={`${base} ${style}`}>
-      {STATUS_LABEL[status] || status}
-    </span>
-  );
-}
-
-/* ============================
-   UI: Card compacto de partida
-   (Sem placar para jogos AGENDADOS)
-   ============================ */
-
-function MatchRow({ match, currentTimestamp }) {
-  const home = match.home;
-  const away = match.away;
-
-  const showScore = match.status !== "scheduled"; // agendado NUNCA mostra placar
-
-  const isLive = match.status === "ongoing" || match.status === "paused";
-  const cardBorder = isLive 
-    ? match.status === "ongoing" 
-      ? "border-blue-200" 
-      : "border-orange-200"
-    : "border-gray-200";
 
   return (
     <Link
-      to={`/match/${match.id}`}
-      className={`block border rounded-lg p-3 bg-white hover:bg-gray-50 transition shadow-sm relative overflow-hidden ${cardBorder}`}
+      to={`/team/${team.id}`}
+      className={`min-w-0 flex items-center gap-2 hover:underline ${align === "right" ? "justify-end" : ""}`}
+      onClick={(e) => e.stopPropagation()}
+      title={displayName}
     >
-      <LiveProgressBar status={match.status} />
-      
-      <div className="flex items-start justify-between">
-        <div className="flex items-center gap-2">
-          <StatusPill status={match.status} meta={match.meta || {}} />
-          {isLive && (
-            <span className="inline-flex items-center gap-1 text-[11px] font-medium text-gray-600">
-              🕐 {formatGameTime(match, currentTimestamp)}
-            </span>
-          )}
-          <span className="text-[11px] text-gray-500">
-            {SPORT_ICON} Pebolim
-          </span>
-        </div>
-        {match.starts_at ? (
-          <span className="text-[11px] text-gray-500">{fmtDate(match.starts_at)}</span>
-        ) : (
-          <span className="text-[11px] text-gray-400">{match.venue || ""}</span>
-        )}
-      </div>
+      {content}
+    </Link>
+  );
+}
 
-      <div className="mt-2 flex items-center gap-3">
-        {/* Home */}
-        <div className="flex items-center gap-2 min-w-0 flex-1">
-          <TeamBadge team={home || { name: "A definir" }} size={28} />
-          <Link
-            to={home?.id ? `/team/${home.id}` : "#"}
-            onClick={(e) => {
-              if (!home?.id) e.preventDefault();
-              e.stopPropagation();
-            }}
-            className={`truncate text-sm font-medium hover:underline ${
-              home?.id ? "text-gray-900" : "text-gray-400 pointer-events-none"
-            }`}
-            title={home?.name || "A definir"}
-          >
-            {home?.name || "A definir"}
-          </Link>
-        </div>
+/* ── UI: Cards de partida ──────────────────────────────────────────────────── */
+function ListMatchCard({ match }) {
+  const showScore = match?.status && match.status !== "scheduled";
+  const homeScore = Number(match?.home_score ?? 0);
+  const awayScore = Number(match?.away_score ?? 0);
 
-        {/* Centro */}
-        <div className="shrink-0 text-center">
+  return (
+    <Link to={`/match/${match.id}`} className="block rounded-xl border border-gray-200 bg-white p-3 shadow-sm transition hover:bg-gray-50">
+      <TitleLine order_idx={match.order_idx} stage={match.stage} group_name={match.group_name} />
+      <div className="mt-1 grid grid-cols-3 items-center gap-2">
+        <TeamChip team={match.home} />
+        <div className="text-center">
           {showScore ? (
-            <span className="font-bold text-lg tabular-nums">
-              {match.home_score ?? 0} <span className="text-gray-400">x</span>{" "}
-              {match.away_score ?? 0}
+            <span className="text-base font-bold tabular-nums">
+              {homeScore} <span className="text-gray-400">x</span> {awayScore}
             </span>
-          ) : null}
-          <div className="text-[10px] text-gray-400 uppercase tracking-wide">
-            {match.stage || ""}
-            {match.round ? ` · J${match.round}` : ""}
-            {match.group_name ? ` · G${match.group_name}` : ""}
-          </div>
+          ) : (
+            <span className="text-xs text-gray-500">—</span>
+          )}
         </div>
-
-        {/* Away */}
-        <div className="flex items-center gap-2 min-w-0 flex-1 justify-end">
-          <Link
-            to={away?.id ? `/team/${away.id}` : "#"}
-            onClick={(e) => {
-              if (!away?.id) e.preventDefault();
-              e.stopPropagation();
-            }}
-            className={`truncate text-sm font-medium hover:underline text-right ${
-              away?.id ? "text-gray-900" : "text-gray-400 pointer-events-none"
-            }`}
-            title={away?.name || "A definir"}
-          >
-            {away?.name || "A definir"}
-          </Link>
-          <TeamBadge team={away || { name: "A definir" }} size={28} />
-        </div>
+        <TeamChip team={match.away} align="right" />
       </div>
-
-      {/* Rodapé opcional */}
-      <div className="mt-2 flex items-center justify-between text-[11px] text-gray-500">
-        <span className="truncate">{match.venue || ""}</span>
-        {match.status === "finished" && match.updated_at ? (
-          <span>Encerrado em {fmtDate(match.updated_at)}</span>
-        ) : null}
+      <div className="mt-1 flex items-center justify-between text-[11px] text-gray-500">
+        <span className="truncate">{match?.starts_at ? fmtDate(match.starts_at) : match?.venue || ""}</span>
+        {match?.updated_at && match?.status === "finished" ? <span>Encerrado em {fmtDate(match.updated_at)}</span> : null}
       </div>
     </Link>
   );
 }
 
-/* ============================
-   UI: Cartão de chaveamento
-   ============================ */
+function BracketMatchCard({ match, placeholder }) {
+  const home = match?.home || (placeholder?.home ? { name: placeholder.home } : null);
+  const away = match?.away || (placeholder?.away ? { name: placeholder.away } : null);
+  const showScore = match && match.status !== "scheduled";
+  const homeScore = Number(match?.home_score ?? 0);
+  const awayScore = Number(match?.away_score ?? 0);
 
-function BracketCard({ title, home, away, badge }) {
-  const H = home || {};
-  const A = away || {};
-  return (
-    <div className="rounded-lg border p-3 bg-white">
-      <div className="flex items-center justify-between mb-2">
-        <div className="text-[11px] font-semibold text-gray-500">{title}</div>
-        {badge && (
-          <span
-            className={`text-[10px] uppercase tracking-wide px-2 py-0.5 rounded ${
-              badge === "Definitivo"
-                ? "bg-green-100 text-green-700"
-                : "bg-yellow-100 text-yellow-700"
-            }`}
-          >
-            {badge}
-          </span>
-        )}
+  const body = (
+    <div className="rounded-2xl border border-gray-200 bg-white p-3 shadow-sm transition hover:bg-gray-50">
+      <TitleLine order_idx={match?.order_idx} stage={match?.stage} />
+      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
+        <div className="min-w-0 justify-self-start">
+          <TeamChip team={home} />
+        </div>
+        <div className="justify-self-center text-xs text-gray-400">x</div>
+        <div className="min-w-0 justify-self-end">
+          <TeamChip team={away} align="right" />
+        </div>
       </div>
-      <div className="flex items-center gap-3">
-        <div className="flex items-center gap-2 min-w-0 flex-1">
-          <TeamBadge team={H.id ? H : { name: "A definir" }} size={24} />
-          <span
-            className={`truncate text-sm ${H.id ? "text-gray-900" : "text-gray-400"}`}
-            title={H.name || "A definir"}
-          >
-            {H.name || "A definir"}
+      <div className="mt-1 flex items-center justify-between text-[11px] text-gray-500">
+        <span className="truncate">{match?.starts_at ? fmtDate(match.starts_at) : match?.venue || ""}</span>
+        {showScore ? (
+          <span className="tabular-nums font-semibold text-gray-700">
+            {homeScore} <span className="text-gray-400">x</span> {awayScore}
           </span>
-        </div>
-        <div className="text-gray-400 text-xs">vs</div>
-        <div className="flex items-center gap-2 min-w-0 flex-1 justify-end">
-          <span
-            className={`truncate text-sm text-right ${A.id ? "text-gray-900" : "text-gray-400"}`}
-            title={A.name || "A definir"}
-          >
-            {A.name || "A definir"}
-          </span>
-          <TeamBadge team={A.id ? A : { name: "A definir" }} size={24} />
-        </div>
+        ) : null}
       </div>
     </div>
   );
+
+  return match?.id ? <Link to={`/match/${match.id}`} className="block">{body}</Link> : body;
 }
 
-/* ============================
-   Chaveamento provisório
-   (A×B, C×D, E×F, G×H; Semis: V1×V2, V3×V4)
-   ============================ */
-
-function computeProvisionalBracket(standings, teamsById) {
-  if (!Array.isArray(standings) || standings.length === 0) return null;
-
-  const getTeam = (id) => ({
-    id,
-    name: teamsById[id]?.name || teamsById[id] || "—",
-    logo_url: teamsById[id]?.logo_url,
-    color: teamsById[id]?.color,
-  });
-
-  const win = (g) => standings.find((r) => r.group_name === g && r.rank === 1);
-
-  const a = win("A"),
-    b = win("B"),
-    c = win("C"),
-    d = win("D"),
-    e = win("E"),
-    f = win("F"),
-    g = win("G"),
-    h = win("H");
-
-  if (!(a && b && c && d && e && f && g && h)) return null;
-
-  const q1 = { home: getTeam(a.team_id), away: getTeam(b.team_id) }; // A×B
-  const q2 = { home: getTeam(c.team_id), away: getTeam(d.team_id) }; // C×D
-  const q3 = { home: getTeam(e.team_id), away: getTeam(f.team_id) }; // E×F
-  const q4 = { home: getTeam(g.team_id), away: getTeam(h.team_id) }; // G×H
-
-  const v1 = { id: "v1", name: "Vencedor 1" };
-  const v2 = { id: "v2", name: "Vencedor 2" };
-  const v3 = { id: "v3", name: "Vencedor 3" };
-  const v4 = { id: "v4", name: "Vencedor 4" };
-
-  return {
-    quarters: [q1, q2, q3, q4],
-    semis: [
-      { home: v1, away: v2 }, // V1 × V2
-      { home: v3, away: v4 }, // V3 × V4
-    ],
-  };
-}
-
-/* ============================
-   Extrai KO real do banco
-   ============================ */
-
-function extractKnockout(matches) {
-  const byStage = (stage) =>
-    (matches || [])
-      .filter((m) => m.stage === stage)
-      .sort((a, b) => (a.round || 0) - (b.round || 0));
-
-  const quartas = byStage("quartas");
-  const semis = byStage("semi");
-  const final = byStage("final");
-
-  return {
-    q1: quartas[0],
-    q2: quartas[1],
-    q3: quartas[2],
-    q4: quartas[3],
-    semi1: semis[0],
-    semi2: semis[1],
-    final: final[0],
-  };
-}
-
-/* ============================
-   Tabela de classificação
-   ============================ */
-
+/* ── Classificação ─────────────────────────────────────────────────────────── */
 function StandingsTable({ standings, teamsById }) {
   const groups = useMemo(() => {
     const map = {};
@@ -364,37 +209,32 @@ function StandingsTable({ standings, teamsById }) {
       map[g].push(r);
     }
     for (const g of Object.keys(map)) {
-      map[g].sort((a, b) => (a.rank || 99) - (b.rank || 99));
+      map[g].sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99));
     }
     return map;
   }, [standings]);
 
   const groupKeys = Object.keys(groups).sort();
-
-  if (groupKeys.length === 0) {
-    return <div className="text-xs text-gray-500">Sem dados de classificação.</div>;
-  }
+  if (groupKeys.length === 0) return <div className="text-xs text-gray-500">Sem dados de classificação.</div>;
 
   return (
-    <div className="space-y-6">
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
       {groupKeys.map((g) => (
-        <div key={g} className="border rounded-lg overflow-hidden">
-          <div className="px-3 py-2 bg-gray-50 border-b text-sm font-semibold">
-            Grupo {g}
-          </div>
+        <div key={g} className="overflow-hidden rounded-2xl border bg-white shadow-sm">
+          <div className="border-b bg-gray-50 px-3 py-2 text-sm font-semibold">Grupo {g}</div>
           <table className="min-w-full text-xs sm:text-sm">
             <thead>
               <tr className="border-b text-gray-600">
-                <th className="py-1 pl-3 text-left w-10">#</th>
+                <th className="w-8 py-1 pl-3 text-left">#</th>
                 <th className="py-1 text-left">Time</th>
-                <th className="py-1 text-center w-10">P</th>
-                <th className="py-1 text-center w-10">V</th>
-                <th className="py-1 text-center w-10">E</th>
-                <th className="py-1 text-center w-10">D</th>
-                <th className="py-1 text-center w-10">GP</th>
-                <th className="py-1 text-center w-10">GC</th>
-                <th className="py-1 text-center w-12">+/-</th>
-                <th className="py-1 text-center w-12">Pts</th>
+                <th className="w-10 py-1 text-center">P</th>
+                <th className="w-10 py-1 text-center">V</th>
+                <th className="w-10 py-1 text-center">E</th>
+                <th className="w-10 py-1 text-center">D</th>
+                <th className="w-10 py-1 text-center">GP</th>
+                <th className="w-10 py-1 text-center">GC</th>
+                <th className="w-12 py-1 text-center">+/-</th>
+                <th className="w-12 py-1 text-center">Pts</th>
               </tr>
             </thead>
             <tbody>
@@ -402,21 +242,16 @@ function StandingsTable({ standings, teamsById }) {
                 const team =
                   teamsById[row.team_id] && typeof teamsById[row.team_id] === "object"
                     ? teamsById[row.team_id]
-                    : {
-                        id: row.team_id,
-                        name: row.team_name || teamsById[row.team_id] || "—",
-                      };
-
+                    : { id: row.team_id, name: String(row.team_name ?? teamsById[row.team_id]?.name ?? "—") };
                 return (
-                  <tr key={`${g}-${row.rank}-${row.team_id}`} className="border-b">
+                  <tr key={`${g}-${row.team_id}`} className="border-b">
                     <td className="py-1 pl-3">{row.rank}</td>
                     <td className="py-1">
-                      <Link
-                        to={`/team/${team.id}`}
-                        className="hover:underline flex items-center gap-2"
-                      >
+                      <Link to={`/team/${team.id}`} className="flex items-center gap-2 hover:underline">
                         <TeamBadge team={team} size={20} />
-                        <span className="truncate">{team.name}</span>
+                        <span className="truncate">
+                          {typeof team.name === "string" ? team.name : String(team.name ?? "—")}
+                        </span>
                       </Link>
                     </td>
                     <td className="py-1 text-center">{row.matches_played}</td>
@@ -432,658 +267,526 @@ function StandingsTable({ standings, teamsById }) {
               })}
             </tbody>
           </table>
+          <div className="px-3 py-2 text-[10px] text-gray-500">Critérios: Pontos, Vitórias, Saldo de Gols, Gols Pró.</div>
         </div>
       ))}
     </div>
   );
 }
 
-/* ============================
-   Helper: garantir standings E recalcular quando necessário
-   ============================ */
+/* ── Knockout helpers ──────────────────────────────────────────────────────── */
+function extractKnockout(matches) {
+  const byStage = (stage) =>
+    (matches || [])
+      .filter((m) => m.stage === stage)
+      .sort((a, b) => (Number(a?.order_idx) || Number.MAX_SAFE_INTEGER) - (Number(b?.order_idx) || Number.MAX_SAFE_INTEGER));
 
-const ensureInitialStandings = async (sportName) => {
-  try {
-    await supabase.rpc("seed_initial_standings", {
-      p_sport_name: sportName,
-      p_reset: false,
-    });
-  } catch (err) {
-    console.warn("seed_initial_standings exception:", err);
+  const oitavas = byStage("oitavas");
+  const quartas = byStage("quartas");
+  const semis = byStage("semi");
+  const final = byStage("final");
+  const third = byStage("3lugar");
+
+  return { oitavas, quartas, semis, final: final[0], third: third[0] };
+}
+
+function computeProvisionalFromStandings(standings, teamsById) {
+  if (!Array.isArray(standings) || standings.length === 0) {
+    const pair = (g1, g2) => ({ home: { name: `1º Grupo ${g1}` }, away: { name: `1º Grupo ${g2}` } });
+    return {
+      quarters: [pair("A", "B"), pair("C", "D"), pair("E", "F"), pair("G", "H")],
+      semis: [
+        { home: { name: "Vencedor Quartas 1" }, away: { name: "Vencedor Quartas 2" } },
+        { home: { name: "Vencedor Quartas 3" }, away: { name: "Vencedor Quartas 4" } },
+      ],
+    };
   }
-};
-
-// Nova função para forçar recálculo das standings
-const recalculateStandings = async (sportName) => {
-  try {
-    console.log('🔄 Recalculando standings para:', sportName);
-    await supabase.rpc("recalculate_standings", {
-      p_sport_name: sportName,
-    });
-    console.log('✅ Standings recalculadas com sucesso');
-  } catch (err) {
-    console.error("Erro ao recalcular standings:", err);
+  const winners = {};
+  for (const g of "ABCDEFGH".split("")) {
+    const w = standings.find((r) => r.group_name === g && r.rank === 1);
+    if (w) {
+      winners[g] = {
+        id: w.team_id,
+        name: w.team_name || teamsById[w.team_id]?.name || "—",
+        logo_url: teamsById[w.team_id]?.logo_url,
+        color: teamsById[w.team_id]?.color,
+      };
+    }
   }
-};
+  const pair = (g1, g2) => ({
+    home: winners[g1] || { name: `1º Grupo ${g1}` },
+    away: winners[g2] || { name: `1º Grupo ${g2}` },
+  });
+  const quarters = [pair("A", "B"), pair("C", "D"), pair("E", "F"), pair("G", "H")];
+  const semis = [
+    { home: { name: "Vencedor Quartas 1" }, away: { name: "Vencedor Quartas 2" } },
+    { home: { name: "Vencedor Quartas 3" }, away: { name: "Vencedor Quartas 4" } },
+  ];
+  return { quarters, semis };
+}
 
-/* ============================
-   Página: Pebolim
-   ============================ */
+/* ── Error Boundary ────────────────────────────────────────────────────────── */
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+  componentDidCatch(error, info) {
+    // loga no console para fácil diagnóstico
+    console.error("Pebolim ErrorBoundary:", error, info);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+          <div className="font-semibold mb-1">Algo quebrou ao renderizar esta página.</div>
+          <div className="font-mono text-xs whitespace-pre-wrap">{String(this.state.error?.message || this.state.error)}</div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
+/* ── Página — Pebolim (Hub) ───────────────────────────────────────────────── */
 export default function Pebolim() {
   const [sportId, setSportId] = useState(null);
-  const [matches, setMatches] = useState([]);
-  const [standings, setStandings] = useState([]);
   const [teamsById, setTeamsById] = useState({});
+  const [standings, setStandings] = useState([]);
+  const [matches, setMatches] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [currentTimestamp, setCurrentTimestamp] = useState(Date.now());
+
+  const [groupFilter, setGroupFilter] = useState("todos");
+  const [stageFilter, setStageFilter] = useState("todos");
+
   const channelRef = useRef(null);
-  const timerRef = useRef(null);
-  const koEnsuredRef = useRef(false); // evita chamar RPC em loop
-  
-  // Novo ref para detectar mudanças em partidas finalizadas
-  const finishedMatchesRef = useRef(new Map());
+  const refreshTimerRef = useRef(null);
 
-  // ID do esporte
-  const loadSportId = async () => {
-    const { data } = await supabase
-      .from("sports")
-      .select("id")
-      .eq("name", "Pebolim")
-      .maybeSingle();
-    if (data?.id) setSportId(data.id);
-  };
+  /* Loaders */
+  const loadSportId = useCallback(async () => {
+    try {
+      const { data, error } = await supabase.from("sports").select("id").eq("name", "Pebolim").maybeSingle();
+      if (error) {
+        console.error("Erro ao carregar sport id:", error);
+        return;
+      }
+      if (data?.id) setSportId(data.id);
+    } catch (e) {
+      console.error("Exceção loadSportId:", e);
+    }
+  }, []);
 
-  // Times
-  const loadTeams = async (sid) => {
-    const { data } = await supabase
-      .from("teams")
-      .select("id, name, logo_url, color")
-      .eq("sport_id", sid);
-    if (data) {
+  const loadTeams = useCallback(async (sid) => {
+    try {
+      const { data, error } = await supabase.from("teams").select("id, name, logo_url, color").eq("sport_id", sid);
+      if (error) {
+        console.error("Erro ao carregar teams:", error);
+        return;
+      }
       const map = {};
-      for (const t of data) {
-        map[t.id] = {
-          ...t,
-          logo_url: (() => {
-            const url = publicLogoUrl(t.logo_url);
-            return url ? `${url}${url.includes("?") ? "&" : "?"}v=1` : null;
-          })(),
+      for (const t of data || []) {
+        map[t.id] = { 
+          ...t, 
+          name: String(t.name ?? "—"),          // <- força string aqui
+          logo_url: normalizeLogo(t.logo_url) 
         };
       }
       setTeamsById(map);
+    } catch (e) {
+      console.error("Exceção loadTeams:", e);
     }
-  };
+  }, []);
 
-  // Partidas
-  const loadMatches = async (sid) => {
-    const { data } = await supabase
-      .from("matches")
-      .select(`
-        id,
-        stage,
-        round,
-        group_name,
-        starts_at,
-        updated_at,
-        venue,
-        status,
-        meta,
-        home_score,
-        away_score,
-        home_team_id,
-        away_team_id,
-        home:home_team_id ( id, name, logo_url, color ),
-        away:away_team_id ( id, name, logo_url, color )
-      `)
-      .eq("sport_id", sid)
-      .order("stage", { ascending: true, nullsFirst: true })
-      .order("round", { ascending: true, nullsFirst: true })
-      .order("starts_at", { ascending: true, nullsFirst: true });
-    
-    if (data) {
-      // Normaliza os logos das partidas
-      const normalized = data.map((m) => {
-        const home =
-          m.home && typeof m.home === "object"
-            ? {
-                ...m.home,
-                logo_url: (() => {
-                  const url = publicLogoUrl(m.home.logo_url);
-                  return url ? `${url}${url.includes("?") ? "&" : "?"}v=1` : null;
-                })(),
-              }
-            : m.home;
+  const loadStandings = useCallback(async (sid) => {
+    try {
+      const v = await supabase
+        .from("standings_view")
+        .select("group_name, rank, team_id, team_name, matches_played, wins, draws, losses, goals_for, goals_against, goal_difference, points")
+        .eq("sport_id", sid)
+        .order("group_name", { ascending: true, nullsFirst: true })
+        .order("rank", { ascending: true });
 
-        const away =
-          m.away && typeof m.away === "object"
-            ? {
-                ...m.away,
-                logo_url: (() => {
-                  const url = publicLogoUrl(m.away.logo_url);
-                  return url ? `${url}${url.includes("?") ? "&" : "?"}v=1` : null;
-                })(),
-              }
-            : m.away;
+      if (!v.error && v.data) {
+        setStandings(v.data);
+        return;
+      }
 
-        return { ...m, home, away };
-      });
-      
-      setMatches(normalized);
-    }
-  };
-
-  // Standings
-  const loadStandings = async (sid) => {
-    let rows = null;
-
-    const v = await supabase
-      .from("standings_view")
-      .select(
-        "group_name, rank, team_id, team_name, matches_played, wins, draws, losses, goals_for, goals_against, goal_difference, points"
-      )
-      .eq("sport_id", sid)
-      .order("group_name", { ascending: true, nullsFirst: true })
-      .order("rank", { ascending: true });
-
-    if (!v.error && v.data) rows = v.data;
-
-    if (!rows) {
       const j = await supabase
         .from("standings")
         .select(`
-          group_name,
-          rank,
-          team_id,
-          matches_played,
-          wins, draws, losses,
-          goals_for, goals_against, goal_difference,
-          points,
-          team:teams!standings_team_id_fkey(name, logo_url, color, id)
+          group_name, rank, team_id,
+          matches_played, wins, draws, losses,
+          goals_for, goals_against, goal_difference, points,
+          team:teams!standings_team_id_fkey(name)
         `)
         .eq("sport_id", sid)
         .order("group_name", { ascending: true, nullsFirst: true })
         .order("rank", { ascending: true });
 
-      rows =
-        (j.data || []).map((r) => ({
-          ...r,
-          team_name: r.team?.name,
-        })) || [];
+      const rows = (j.data || []).map((r) => ({ ...r, team_name: r.team?.name })) || [];
+      setStandings(rows);
+    } catch (e) {
+      console.error("Exceção loadStandings:", e);
     }
+  }, []);
 
-    setStandings(rows || []);
-  };
+  const loadMatches = useCallback(async (sid) => {
+    try {
+      // Tenta a view detalhada
+      const { data: vrows, error: verr } = await supabase
+        .from("match_detail_view")
+        .select(`
+          id, sport_id, order_idx,
+          stage, round, group_name, starts_at, updated_at, venue, status,
+          home_team_id, home_team_name, home_team_color, home_team_logo,
+          away_team_id, away_team_name, away_team_color, away_team_logo,
+          home_score, away_score
+        `)
+        .eq("sport_id", sid);
 
-  // Load all
-  const loadAll = async (sid) => {
-    setLoading(true);
-    await Promise.all([
-      loadTeams(sid),
-      loadMatches(sid),
-      loadStandings(sid),
-      ensureInitialStandings("Pebolim"),
-    ]);
-    setLoading(false);
-  };
+      let rows = [];
+      if (!verr && vrows?.length) {
+        rows = vrows.map((r) => ({
+          id: r.id,
+          sport_id: r.sport_id,
+          order_idx: r.order_idx,
+          stage: r.stage,
+          round: r.round,
+          group_name: r.group_name,
+          starts_at: r.starts_at,
+          updated_at: r.updated_at,
+          venue: r.venue,
+          status: r.status,
+          home_score: r.home_score,
+          away_score: r.away_score,
+          home: r.home_team_id
+            ? { id: r.home_team_id, name: String(r.home_team_name ?? "A definir"), color: r.home_team_color, logo_url: normalizeLogo(r.home_team_logo) }
+            : null,
+          away: r.away_team_id
+            ? { id: r.away_team_id, name: String(r.away_team_name ?? "A definir"), color: r.away_team_color, logo_url: normalizeLogo(r.away_team_logo) }
+            : null,
+        }));
+      } else {
+        // Fallback: tabela matches
+        const { data: jrows, error: jerr } = await supabase
+          .from("matches")
+          .select(`
+            id, stage, round, group_name, starts_at, updated_at, venue, status,
+            home_score, away_score,
+            home:home_team_id ( id, name, logo_url, color ),
+            away:away_team_id ( id, name, logo_url, color )
+          `)
+          .eq("sport_id", sid);
 
-  // Nova função para detectar mudanças em partidas finalizadas
-  const detectFinishedMatchChanges = (newMatches) => {
-    const currentFinished = new Map();
-    let hasChanges = false;
-
-    // Mapear partidas finalizadas atuais
-    newMatches
-      .filter(m => m.status === 'finished')
-      .forEach(m => {
-        const key = m.id;
-        const scoreKey = `${m.home_score}-${m.away_score}`;
-        currentFinished.set(key, scoreKey);
-
-        // Verificar se houve mudança no placar
-        const oldScore = finishedMatchesRef.current.get(key);
-        if (oldScore && oldScore !== scoreKey) {
-          console.log(`🔄 Detectada mudança no placar da partida ${m.id}: ${oldScore} → ${scoreKey}`);
-          hasChanges = true;
+        if (jerr) {
+          console.error("Erro matches fallback:", jerr);
+          setMatches([]);
+          return;
         }
+
+        rows = (jrows || []).map((m) => ({
+          ...m,
+          order_idx: m.order_idx ?? m.round ?? m.id, // cria ordem estável
+          home: m.home ? { ...m.home, name: String(m.home.name ?? "A definir"), logo_url: normalizeLogo(m.home.logo_url) } : null,
+          away: m.away ? { ...m.away, name: String(m.away.name ?? "A definir"), logo_url: normalizeLogo(m.away.logo_url) } : null,
+        }));
+            }
+
+      // Ordenação robusta por fase + ordem estável
+      const phaseRank = { grupos: 1, oitavas: 2, quartas: 3, semi: 4, "3lugar": 5, final: 6 };
+      const ord = (x) => {
+        const v = Number(x?.order_idx);
+        return Number.isFinite(v) ? v : Number.MAX_SAFE_INTEGER;
+      };
+      rows.sort((a, b) => {
+        const pa = phaseRank[a.stage] ?? 99;
+        const pb = phaseRank[b.stage] ?? 99;
+        if (pa !== pb) return pa - pb;
+        return ord(a) - ord(b);
       });
 
-    // Atualizar a referência
-    finishedMatchesRef.current = currentFinished;
-
-    // Se houve mudanças, recalcular standings
-    if (hasChanges) {
-      console.log('🔄 Mudanças detectadas em partidas finalizadas, recalculando standings...');
-      recalculateStandings("Pebolim").then(() => {
-        // Recarregar standings após recálculo
-        if (sportId) {
-          loadStandings(sportId);
-        }
-      });
+      setMatches(rows);
+    } catch (e) {
+      console.error("Exceção loadMatches:", e);
+      setMatches([]);
     }
-  };
+  }, []);
 
-  // Efeitos
+  const loadAll = useCallback(
+    async (sid, { skeleton = false } = {}) => {
+      if (skeleton) setLoading(true);
+      try {
+        await Promise.all([loadTeams(sid), loadStandings(sid), loadMatches(sid)]);
+      } finally {
+        if (skeleton) setLoading(false);
+      }
+    },
+    [loadTeams, loadStandings, loadMatches]
+  );
+
+  /* Effects */
   useEffect(() => {
     loadSportId();
-  }, []);
+  }, [loadSportId]);
 
   useEffect(() => {
     if (!sportId) return;
-    loadAll(sportId);
+    loadAll(sportId, { skeleton: true });
 
-    // Timer para atualizar o timestamp a cada segundo
-    timerRef.current = setInterval(() => {
-      setCurrentTimestamp(Date.now());
-    }, 1000);
-
-    // Realtime: eventos e mudanças de partidas
+    // Realtime com debounce
     if (channelRef.current) {
-      supabase.removeChannel(channelRef.current);
+      try { supabase.removeChannel(channelRef.current); } catch {}
       channelRef.current = null;
     }
-
-    const channel = supabase
-      .channel("pebolim-live")
+    const ch = supabase
+      .channel(`pebolim-hub-${sportId}`)
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "match_events" },
+        { event: "*", schema: "public", table: "matches", filter: `sport_id=eq.${sportId}` },
         () => {
-          console.log('📡 Match events changed, reloading standings...');
-          loadStandings(sportId);
-        }
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "matches" },
-        (payload) => {
-          console.log('📡 Matches changed:', payload);
-          loadAll(sportId);
+          if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+          refreshTimerRef.current = setTimeout(() => loadAll(sportId, { skeleton: false }), 200);
         }
       )
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "standings" },
         () => {
-          console.log('📡 Standings changed, reloading...');
-          loadStandings(sportId);
+          if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+          refreshTimerRef.current = setTimeout(() => loadAll(sportId, { skeleton: false }), 200);
         }
       )
       .subscribe();
-
-    channelRef.current = channel;
+    channelRef.current = ch;
 
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-      if (channelRef.current) supabase.removeChannel(channelRef.current);
-      channelRef.current = null;
+      if (refreshTimerRef.current) {
+        clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
+      if (channelRef.current) {
+        try { supabase.removeChannel(channelRef.current); } catch {}
+        channelRef.current = null;
+      }
     };
-  }, [sportId]);
+  }, [sportId, loadAll]);
 
-  // Detectar mudanças em partidas finalizadas sempre que matches mudar
-  useEffect(() => {
-    if (matches.length > 0) {
-      detectFinishedMatchChanges(matches);
-    }
-  }, [matches]);
-
-  // ======= Derivados =======
-
-  // Agendados: APENAS jogos definidos
-  const scheduled = useMemo(() => {
-    const arr = matches.filter(
-      (m) =>
-        m.status === "scheduled" &&
-        (
-          m.group_name /* grupos */ ||
-          (m.home_team_id && m.away_team_id) /* KO só se os DOIS times estiverem definidos */
-        )
-    );
-    arr.sort((a, b) => {
-      const da = a.starts_at
-        ? new Date(a.starts_at).getTime()
-        : Number.POSITIVE_INFINITY;
-      const db = b.starts_at
-        ? new Date(b.starts_at).getTime()
-        : Number.POSITIVE_INFINITY;
-      return da - db;
-    });
-    return arr;
-  }, [matches]);
-
-  const liveOrPaused = useMemo(
-    () => matches.filter((m) => m.status === "ongoing" || m.status === "paused"),
-    [matches]
-  );
-
-  const finished = useMemo(() => {
-    const arr = matches.filter((m) => m.status === "finished");
-    arr.sort(
-      (a, b) =>
-        new Date(b.updated_at || b.starts_at || 0) -
-        new Date(a.updated_at || a.starts_at || 0)
-    );
-    return arr;
-  }, [matches]);
-
+  /* Derivações */
+  const hasGroups = useMemo(() => (standings?.length ? true : (matches || []).some((m) => !!m.group_name)), [standings, matches]);
   const knockout = useMemo(() => extractKnockout(matches), [matches]);
+  const provisionalFromStandings = useMemo(() => computeProvisionalFromStandings(standings, teamsById), [standings, teamsById]);
 
-  // Provisório: só se ainda não existir ao menos uma quarta ou semi definida no banco
-  const provisional = useMemo(() => {
-    const hasAnyDef =
-      (knockout?.q1 && knockout.q1.home && knockout.q1.away) ||
-      (knockout?.semi1 && knockout.semi1.home && knockout.semi1.away);
-    if (hasAnyDef) return null;
-    return computeProvisionalBracket(standings, teamsById);
-  }, [knockout, standings, teamsById]);
-
-  // Quando TODOS os jogos da fase de grupos terminarem, garante o agendamento das QUARTAS no servidor
-  const allGroupMatchesFinished = useMemo(() => {
-    const gm = matches.filter((m) => m.stage === "grupos");
-    if (gm.length === 0) return false;
-    return gm.every((m) => m.status === "finished");
+  const groupOptions = useMemo(() => {
+    const set = new Set();
+    (matches || []).forEach((m) => m.group_name && set.add(m.group_name));
+    return ["todos", ...Array.from(set).sort()];
   }, [matches]);
 
-  const quartersDefinitiveAll =
-    knockout?.q1?.home && knockout?.q1?.away &&
-    knockout?.q2?.home && knockout?.q2?.away &&
-    knockout?.q3?.home && knockout?.q3?.away &&
-    knockout?.q4?.home && knockout?.q4?.away;
+  const stageOptions = useMemo(() => {
+    const set = new Set();
+    (matches || []).forEach((m) => m.stage && set.add(m.stage));
+    const order = ["grupos", "oitavas", "quartas", "semi", "3lugar", "final"];
+    const ordered = Array.from(set).sort((a, b) => (order.indexOf(a) + 100) - (order.indexOf(b) + 100));
+    return ["todos", ...ordered];
+  }, [matches]);
 
-  useEffect(() => {
-    (async () => {
-      if (!sportId) return;
-      if (!allGroupMatchesFinished) return;
-      if (quartersDefinitiveAll) return;
-      if (koEnsuredRef.current) return;
+  const scheduledAll = useMemo(() => {
+    let arr = (matches || []).filter((m) => {
+      if (m.status !== "scheduled") return false;
+      if (m.group_name) return true;
+      return m.home?.id && m.away?.id;
+    });
+    if (groupFilter !== "todos") arr = arr.filter((m) => m.group_name === groupFilter);
+    if (stageFilter !== "todos") arr = arr.filter((m) => m.stage === stageFilter);
+    arr.sort((a, b) => ts(a.starts_at) - ts(b.starts_at));
+    return arr;
+  }, [matches, groupFilter, stageFilter]);
 
-      await supabase.rpc("maybe_create_knockout", { p_sport_name: "Pebolim" });
-      koEnsuredRef.current = true;
-      await loadAll(sportId);
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sportId, allGroupMatchesFinished, quartersDefinitiveAll]);
+  const finishedRecent = useMemo(() => {
+    const arr = (matches || []).filter((m) => m.status === "finished");
+    arr.sort((a, b) => ts(b.updated_at || b.starts_at || 0) - ts(a.updated_at || a.starts_at || 0));
+    return arr.slice(0, 12);
+  }, [matches]);
 
-  // Cartas das quartas com badges
-  const quarterCards = useMemo(() => {
-    const cards = [];
-
-    const pushDef = (key, title) => {
-      const m = knockout[key];
-      if (m && m.home && m.away) {
-        cards.push({ title, home: m.home, away: m.away, badge: "Definitivo" });
-        return true;
-      }
-      return false;
-    };
-
-    const pushProv = (idx, title) => {
-      if (provisional?.quarters?.[idx]) {
-        cards.push({
-          title: `${title} (provisória)`,
-          home: provisional.quarters[idx].home,
-          away: provisional.quarters[idx].away,
-          badge: "Provisório",
-        });
-      }
-    };
-
-    pushDef("q1", "Quartas 1 — A×B (Vencedor 1)") || pushProv(0, "Quartas 1");
-    pushDef("q2", "Quartas 2 — C×D (Vencedor 2)") || pushProv(1, "Quartas 2");
-    pushDef("q3", "Quartas 3 — E×F (Vencedor 3)") || pushProv(2, "Quartas 3");
-    pushDef("q4", "Quartas 4 — G×H (Vencedor 4)") || pushProv(3, "Quartas 4");
-
-    return cards;
-  }, [knockout, provisional]);
-
-  // Cartas das semis/final
-  const semiAndFinalCards = useMemo(() => {
-    const semiCards = [];
-    if (knockout.semi1 && knockout.semi1.home && knockout.semi1.away) {
-      semiCards.push({
-        title: "Semifinal 1 — Vencedor 1 × Vencedor 2",
-        home: knockout.semi1.home,
-        away: knockout.semi1.away,
-        badge: "Definitivo",
-      });
-    } else if (provisional?.semis?.[0]) {
-      semiCards.push({
-        title: "Semifinal 1 (provisória) — Vencedor 1 × Vencedor 2",
-        home: provisional.semis[0].home,
-        away: provisional.semis[0].away,
-        badge: "Provisório",
-      });
-    }
-
-    if (knockout.semi2 && knockout.semi2.home && knockout.semi2.away) {
-      semiCards.push({
-        title: "Semifinal 2 — Vencedor 3 × Vencedor 4",
-        home: knockout.semi2.home,
-        away: knockout.semi2.away,
-        badge: "Definitivo",
-      });
-    } else if (provisional?.semis?.[1]) {
-      semiCards.push({
-        title: "Semifinal 2 (provisória) — Vencedor 3 × Vencedor 4",
-        home: provisional.semis[1].home,
-        away: provisional.semis[1].away,
-        badge: "Provisório",
-      });
-    }
-
-    const finalCards = [];
-    if (knockout.final && knockout.final.home && knockout.final.away) {
-      finalCards.push({
-        title: "Final",
-        home: knockout.final.home,
-        away: knockout.final.away,
-        badge: "Definitivo",
-      });
-    }
-
-    return { semiCards, finalCards };
-  }, [knockout, provisional]);
-
-  /* ============================
-     Render
-     ============================ */
-
+  /* Render */
   return (
-    <div className="space-y-10">
-      <header className="space-y-1">
-        <div className="flex items-center gap-2">
-          <span className="text-2xl">{SPORT_ICON}</span>
-          <h2 className="text-2xl font-bold">Pebolim</h2>
-        </div>
-        <p className="text-sm text-gray-600">
-          Partidas em <strong>1 rodada de 4 gols</strong>. Tabela de pontos igual ao futsal (3-1-0).
-        </p>
-      </header>
-
-      {loading ? (
-        <div className="space-y-4">
-          <div className="h-6 w-40 bg-gray-200 rounded animate-pulse" />
-          <div className="grid md:grid-cols-2 gap-3">
-            {Array.from({ length: 6 }).map((_, i) => (
-              <div key={i} className="h-20 bg-gray-100 rounded animate-pulse" />
-            ))}
+    <ErrorBoundary>
+      <div className="space-y-10">
+        {/* Header */}
+        <header className="space-y-1">
+          <div className="flex items-center gap-2">
+            <span className="text-2xl">{SPORT_ICON}</span>
+            <h2 className="text-2xl font-bold">{SPORT_LABEL}</h2>
           </div>
-        </div>
-      ) : (
-        <>
-          {/* Botão manual para recalcular standings (para debug/admin) */}
-          {process.env.NODE_ENV === 'development' && (
-            <div className="border-2 border-dashed border-orange-200 p-3 rounded">
-              <p className="text-xs text-orange-600 mb-2">
-                🛠️ Modo desenvolvimento - Ferramentas de debug:
-              </p>
-              <button
-                onClick={() => recalculateStandings("Pebolim").then(() => loadStandings(sportId))}
-                className="text-xs bg-orange-100 text-orange-700 px-2 py-1 rounded hover:bg-orange-200"
-              >
-                🔄 Recalcular standings manualmente
-              </button>
+          <p className="text-sm text-gray-600">
+            Hub informativo: <strong>classificação</strong> (se houver grupos) → <strong>chaveamento</strong> →{" "}
+            <strong>jogos agendados</strong> → <strong>regulamento</strong>. Não há indicadores de “ao vivo/pausado” nesta página.
+          </p>
+        </header>
+
+        {/* Skeleton */}
+        {loading ? (
+          <div className="space-y-6">
+            <div className="h-6 w-48 rounded bg-gray-100 animate-pulse" />
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              {Array.from({ length: 8 }).map((_, i) => (
+                <div key={i} className="h-20 rounded-xl bg-gray-100 animate-pulse" />
+              ))}
             </div>
-          )}
+          </div>
+        ) : (
+          <>
+            {/* 1) CLASSIFICAÇÃO */}
+            {hasGroups && (
+              <section className="space-y-4">
+                <h3 className="text-lg font-bold">Tabela de classificação</h3>
+                <StandingsTable standings={standings} teamsById={teamsById} />
+              </section>
+            )}
 
-          {/* Partidas */}
-          <section className="space-y-6">
-            <h3 className="text-lg font-bold">Partidas</h3>
+            {/* 2) CHAVEAMENTO */}
+            <section className="space-y-4">
+              <h3 className="text-lg font-bold">Chaveamento</h3>
 
-            <div className="space-y-4">
-              {/* Ao vivo / Pausado */}
-              <div className="space-y-2">
-                <h4 className="text-sm font-semibold text-gray-700">Ao vivo / Pausado</h4>
-                {liveOrPaused.length === 0 ? (
-                  <div className="text-xs text-gray-500">Nenhuma partida em andamento.</div>
-                ) : (
-                  <div className="grid md:grid-cols-2 gap-3">
-                    {liveOrPaused.map((m) => (
-                      <MatchRow key={m.id} match={m} currentTimestamp={currentTimestamp} />
+              {/* Oitavas (se existir) */}
+              {knockout.oitavas?.length ? (
+                <div className="space-y-2">
+                  <h4 className="text-sm font-semibold text-gray-700">Oitavas de final</h4>
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    {knockout.oitavas.map((m, i) => (
+                      <BracketMatchCard key={`o-${m?.id ?? i}`} match={m} />
                     ))}
                   </div>
-                )}
-              </div>
-
-              {/* Agendados (apenas jogos definidos) */}
-              <div className="space-y-2">
-                <h4 className="text-sm font-semibold text-gray-700">Agendados</h4>
-                {scheduled.length === 0 ? (
-                  <div className="text-xs text-gray-500">Nenhuma partida agendada.</div>
-                ) : (
-                  <div className="grid md:grid-cols-2 gap-3">
-                    {scheduled.map((m) => (
-                      <MatchRow key={m.id} match={m} currentTimestamp={currentTimestamp} />
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* Encerrados */}
-              <div className="space-y-2">
-                <h4 className="text-sm font-semibold text-gray-700">Encerrados (recentes)</h4>
-                {finished.length === 0 ? (
-                  <div className="text-xs text-gray-500">Sem resultados recentes.</div>
-                ) : (
-                  <div className="grid md:grid-cols-2 gap-3">
-                    {finished.map((m) => (
-                      <MatchRow key={m.id} match={m} currentTimestamp={currentTimestamp} />
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          </section>
-
-          {/* Informações do campeonato */}
-          <section className="space-y-6">
-            <h3 className="text-lg font-bold">Informações do campeonato</h3>
-
-            {/* Classificação */}
-            <div className="space-y-2">
-              <h4 className="text-sm font-semibold text-gray-700">Tabela de classificação</h4>
-              <StandingsTable standings={standings} teamsById={teamsById} />
-            </div>
-
-            {/* Chaveamento */}
-            <div className="space-y-2">
-              <h4 className="text-sm font-semibold text-gray-700">Chaveamento</h4>
+                </div>
+              ) : null}
 
               {/* Quartas */}
-              <div className="grid md:grid-cols-2 gap-3">
-                {quarterCards.length > 0 ? (
-                  quarterCards.map((c, i) => (
-                    <BracketCard key={i} title={c.title} home={c.home} away={c.away} badge={c.badge} />
-                  ))
+              {(knockout.quartas?.length || provisionalFromStandings?.quarters) ? (
+                <div className="space-y-2">
+                  <h4 className="text-sm font-semibold text-gray-700">Quartas de final</h4>
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    {Array.from({
+                      length: Math.max(knockout.quartas?.length || 0, provisionalFromStandings?.quarters?.length || 0, 4),
+                    }).map((_, i) => {
+                      const m = knockout.quartas?.[i];
+                      const ph = provisionalFromStandings?.quarters?.[i];
+                      return <BracketMatchCard key={`q-${m?.id ?? i}`} match={m} placeholder={ph} />;
+                    })}
+                  </div>
+                </div>
+              ) : null}
+
+              {/* Semis */}
+              {(knockout.semis?.length || provisionalFromStandings?.semis) ? (
+                <div className="space-y-2">
+                  <h4 className="text-sm font-semibold text-gray-700">Semifinais</h4>
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    {Array.from({
+                      length: Math.max(knockout.semis?.length || 0, provisionalFromStandings?.semis?.length || 0, 2),
+                    }).map((_, i) => {
+                      const m = knockout.semis?.[i];
+                      const ph = provisionalFromStandings?.semis?.[i];
+                      return <BracketMatchCard key={`s-${m?.id ?? i}`} match={m} placeholder={ph} />;
+                    })}
+                  </div>
+                </div>
+              ) : null}
+
+              {/* Final */}
+              <div className="space-y-2">
+                <h4 className="text-sm font-semibold text-gray-700">Final</h4>
+                {knockout.final ? (
+                  <BracketMatchCard match={knockout.final} />
                 ) : (
-                  <div className="col-span-full text-xs text-gray-500">
-                    Chaveamento ainda não disponível. Assim que houver classificação suficiente, os confrontos serão exibidos aqui.
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    <BracketMatchCard placeholder={{ home: "Vencedor Semifinal 1", away: "Vencedor Semifinal 2" }} />
                   </div>
                 )}
               </div>
+            </section>
 
-              {/* Semis + Final */}
-              {(semiAndFinalCards.semiCards.length > 0 || semiAndFinalCards.finalCards.length > 0) && (
-                <div className="grid md:grid-cols-2 gap-3 mt-2">
-                  {semiAndFinalCards.semiCards.map((c, i) => (
-                    <BracketCard key={`s-${i}`} title={c.title} home={c.home} away={c.away} badge={c.badge} />
+            {/* 3) JOGOS AGENDADOS */}
+            <section className="space-y-4">
+              <h3 className="text-lg font-bold">Jogos agendados</h3>
+
+              {/* Filtros */}
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <label className="text-gray-600">Grupo:</label>
+                <select value={groupFilter} onChange={(e) => setGroupFilter(e.target.value)} className="rounded-md border border-gray-300 bg-white px-2 py-1">
+                  {groupOptions.map((g) => (
+                    <option key={g} value={g}>
+                      {g === "todos" ? "Todos" : `Grupo ${g}`}
+                    </option>
                   ))}
-                  {semiAndFinalCards.finalCards.map((c, i) => (
-                    <BracketCard key={`f-${i}`} title={c.title} home={c.home} away={c.away} badge={c.badge} />
+                </select>
+
+                <label className="text-gray-600">Fase:</label>
+                <select value={stageFilter} onChange={(e) => setStageFilter(e.target.value)} className="rounded-md border border-gray-300 bg-white px-2 py-1">
+                  {stageOptions.map((st) => (
+                    <option key={st} value={st}>
+                      {st === "todos" ? "Todas" : friendlyStage(st)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Lista */}
+              {scheduledAll.length ? (
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  {scheduledAll.map((m, i) => (
+                    <ListMatchCard key={m.id ?? `sched-${i}`} match={m} />
                   ))}
                 </div>
+              ) : (
+                <div className="text-xs text-gray-500">Nenhum jogo agendado no momento.</div>
               )}
-            </div>
 
-            {/* Regulamento */}
-            <div className="space-y-2">
-              <h4 className="text-sm font-semibold text-gray-700">Regulamento</h4>
-              <div className="border rounded-lg p-3 bg-white text-sm text-gray-700 space-y-2">
-                <ul className="list-disc pl-5 space-y-1">
+              {/* Encerrados (recentes) */}
+              <div className="space-y-2">
+                <h4 className="text-sm font-semibold text-gray-700">Encerrados (recentes)</h4>
+                {finishedRecent.length ? (
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                    {finishedRecent.map((m, i) => (
+                      <ListMatchCard key={m.id ?? `fin-${i}`} match={m} />
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-xs text-gray-500">Sem resultados recentes.</div>
+                )}
+              </div>
+            </section>
+
+            {/* 4) REGULAMENTO */}
+            <section className="space-y-3">
+              <h3 className="text-lg font-bold">Regulamento</h3>
+              <div className="rounded-2xl border border-gray-200 bg-white p-4 text-sm text-gray-700 shadow-sm">
+                <ul className="list-disc space-y-1 pl-5">
                   <li>
-                    <strong>Duração/placar:</strong> partidas com{" "}
-                    <strong>1 rodada de 4 gols</strong>.
+                    <strong>Duração/placar:</strong> partidas em <strong>1 rodada de 4 gols</strong>.
                   </li>
                   <li>
-                    <strong>Duplas:</strong> cada partida é disputada por <strong>2 duplas</strong>.
+                    <strong>Formato:</strong> fase de grupos (até <strong>8 grupos de 3</strong>) e mata-mata (quartas → semis → final). Se o torneio for direto em mata-mata, o hub começa pelo chaveamento.
                   </li>
                   <li>
-                    <strong>Formato:</strong> fase de grupos e mata-mata.{" "}
-                    <strong>8 grupos de 3 duplas</strong>; avança o <strong>1º</strong> de cada grupo.
+                    <strong>Tabela de pontos (grupos):</strong> vitória <strong>3 pts</strong>, empate <strong>1 pt</strong>, derrota <strong>0 pt</strong>; desempate por <strong>saldo de gols</strong> e depois <strong>gols pró</strong>.
                   </li>
                   <li>
-                    <strong>Tabela de pontos:</strong> vitória <strong>3 pts</strong>, empate{" "}
-                    <strong>1 pt</strong>, derrota <strong>0 pt</strong>.
+                    <strong>Definições do KO:</strong> jogos únicos; em caso de empate, aplica-se a regra da organização (ex.: gol de ouro).
                   </li>
                   <li>
-                    <strong>Desempate nos grupos:</strong> <strong>saldo de gols</strong>.
-                  </li>
-                  <li>
-                    <strong>Mata-mata:</strong> 4 quartas de final, 2 semifinais e 1 final.
-                  </li>
-                  <li>
-                    <strong>Quartas:</strong>
-                    <ul className="list-disc pl-5 mt-1">
-                      <li>
-                        <strong>Q1:</strong> Vencedor A × Vencedor B = <em>Vencedor 1</em>
-                      </li>
-                      <li>
-                        <strong>Q2:</strong> Vencedor C × Vencedor D = <em>Vencedor 2</em>
-                      </li>
-                      <li>
-                        <strong>Q3:</strong> Vencedor E × Vencedor F = <em>Vencedor 3</em>
-                      </li>
-                      <li>
-                        <strong>Q4:</strong> Vencedor G × Vencedor H = <em>Vencedor 4</em>
-                      </li>
-                    </ul>
-                  </li>
-                  <li>
-                    <strong>Semifinais:</strong> <em>Vencedor 1 × Vencedor 2</em> e{" "}
-                    <em>Vencedor 3 × Vencedor 4</em>.
-                  </li>
-                  <li>
-                    <strong>Substituições:</strong> os integrantes da dupla{" "}
-                    <strong>não podem ser substituídos</strong>.
-                  </li>
-                  <li>
-                    <strong>WO:</strong> atraso de até <strong>3 minutos</strong> é tolerado; ausência
-                    de um ou mais integrantes resulta em <strong>WO</strong>.
+                    <strong>WO:</strong> atraso acima do tolerado pode resultar em <strong>WO</strong>.
                   </li>
                 </ul>
+                {/* <a href="/regulamento-pebolim.pdf" className="mt-2 inline-flex text-blue-600 hover:underline">Abrir regulamento completo</a> */}
               </div>
-            </div>
-          </section>
-        </>
-      )}
-
-      <style jsx global>{`
-        @keyframes slideProgress {
-          0% { transform: translateX(-100%); }
-          50% { transform: translateX(200%); }
-          100% { transform: translateX(-100%); }
-        }
-      `}</style>
-    </div>
+            </section>
+          </>
+        )}
+      </div>
+    </ErrorBoundary>
   );
 }
+

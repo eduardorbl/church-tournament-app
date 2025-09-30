@@ -1,5 +1,5 @@
 // src/pages/admin/FifaTournament.jsx
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../supabaseClient";
 import { useNavigate } from "react-router-dom";
 
@@ -12,42 +12,51 @@ export default function FifaTournament() {
   );
   const [selected, setSelected] = useState(new Set());
   const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [sportId, setSportId] = useState(null);
+
   const navigate = useNavigate();
 
-  // Carrega times de FIFA
+  // Carrega times e sportId da modalidade FIFA
   const loadTeams = async () => {
     setLoading(true);
-    const { data: sport, error: sportErr } = await supabase
-      .from("sports")
-      .select("id")
-      .eq("name", "FIFA")
-      .maybeSingle();
-    if (sportErr) {
-      alert("Erro ao buscar a modalidade FIFA.");
-      setLoading(false);
-      return;
-    }
+    try {
+      const { data: sport, error: sportErr } = await supabase
+        .from("sports")
+        .select("id")
+        .eq("name", "FIFA")
+        .maybeSingle();
 
-    if (sport?.id) {
+      if (sportErr || !sport?.id) {
+        alert("Erro ao localizar a modalidade FIFA.");
+        setLoading(false);
+        return;
+      }
+
+      setSportId(sport.id);
+
       const { data: tms, error: tErr } = await supabase
         .from("teams")
-        .select("id,name,logo_url,color")
+        .select("id, name, logo_url, color")
         .eq("sport_id", sport.id)
         .order("name");
+
       if (tErr) {
-        alert("Erro ao carregar times de FIFA.");
+        alert("Erro ao carregar times do FIFA.");
       } else {
         setTeams(tms || []);
       }
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   useEffect(() => {
     loadTeams();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Já alocados no bracket
+  // Times já alocados em algum jogo (para esconder da lista de disponíveis)
   const assigned = useMemo(
     () => new Set(bracket.flatMap((m) => [m.home, m.away]).filter(Boolean)),
     [bracket]
@@ -70,7 +79,7 @@ export default function FifaTournament() {
   const handleAssignToMatch = (matchIdx, side) => {
     const ids = Array.from(selected);
     if (ids.length === 0) {
-      alert("Selecione ao menos 1 time.");
+      alert("Selecione um time para alocar.");
       return;
     }
     if (ids.length > 1) {
@@ -83,7 +92,7 @@ export default function FifaTournament() {
     setBracket((prev) => {
       const match = prev[matchIdx];
       if (match[side]) {
-        alert(`O slot ${side} do Jogo ${matchIdx + 1} já está ocupado.`);
+        alert(`O slot ${side === "home" ? "A" : "B"} do Jogo ${matchIdx + 1} já está ocupado.`);
         return prev;
       }
       const next = [...prev];
@@ -102,29 +111,24 @@ export default function FifaTournament() {
     });
   };
 
-  const allFilled = bracket.every((m) => m.home && m.away) && bracket.length === MATCH_COUNT;
+  const allFilled =
+    bracket.length === MATCH_COUNT && bracket.every((m) => m.home && m.away);
 
+  // ===== Fluxo 1: Confirmar chaveamento MANUAL =====
   const confirmBracket = async () => {
     if (!allFilled) {
       alert("Todos os confrontos precisam ter 2 times.");
       return;
     }
+    if (!sportId) {
+      alert("Modalidade FIFA não encontrada.");
+      return;
+    }
 
     try {
-      // 1) ID do esporte
-      const { data: sport, error: sportErr } = await supabase
-        .from("sports")
-        .select("id")
-        .eq("name", "FIFA")
-        .maybeSingle();
+      setBusy(true);
 
-      if (sportErr || !sport?.id) {
-        alert("Não encontrei a modalidade FIFA.");
-        return;
-      }
-      const sportId = sport.id;
-
-      // 2) Se já houver jogos da FIFA, perguntar se deve resetar
+      // Se já houver jogos, confirmar reset
       const { count: existingMatches } = await supabase
         .from("matches")
         .select("*", { count: "exact", head: true })
@@ -136,35 +140,29 @@ export default function FifaTournament() {
         );
         if (!ok) return;
 
-        // Apaga jogos (match_events caem por CASCADE)
-        const { error: delMatchesErr } = await supabase
+        // Apaga eventos → jogos → standings (caso sua FK não seja CASCADE)
+        const { data: oldMatches } = await supabase
           .from("matches")
-          .delete()
+          .select("id")
           .eq("sport_id", sportId);
-        if (delMatchesErr) {
-          alert("Erro ao apagar jogos existentes: " + delMatchesErr.message);
-          return;
-        }
 
-        // Apaga standings
-        const { error: delStdErr } = await supabase
-          .from("standings")
-          .delete()
-          .eq("sport_id", sportId);
-        if (delStdErr) {
-          alert("Erro ao apagar classificação: " + delStdErr.message);
-          return;
+        const oldIds = (oldMatches || []).map((m) => m.id);
+        if (oldIds.length) {
+          await supabase.from("match_events").delete().in("match_id", oldIds);
         }
+        await supabase.from("matches").delete().eq("sport_id", sportId);
+        await supabase.from("standings").delete().eq("sport_id", sportId);
       }
 
-      // 3) Zera qualquer group_name (FIFA não usa grupos)
+      // FIFA não usa grupos
       await supabase.from("teams").update({ group_name: null }).eq("sport_id", sportId);
 
-      // 4) Insere oitavas conforme o bracket
+      // Oitavas: order_idx 1..16, status 'scheduled' (J1 vira ⚠️ na UI)
       const rows = bracket.map((m, i) => ({
         sport_id: sportId,
         stage: "oitavas",
-        round: i + 1, // 1..16
+        round: i + 1,           // 1..16
+        order_idx: i + 1,       // 1..16 para a fila
         status: "scheduled",
         home_team_id: m.home,
         away_team_id: m.away,
@@ -177,21 +175,61 @@ export default function FifaTournament() {
         return;
       }
 
-      // 5) Garante standings zeradas (não usadas no FIFA, mas idempotente)
+      // Placeholders de quartas/semis/3º/final (17..28)
+      await supabase.from("matches").insert(
+        Array.from({ length: 8 }).map((_, i) => ({
+          sport_id: sportId,
+          stage: "quartas",
+          round: i + 1,
+          order_idx: 16 + (i + 1), // 17..24
+          status: "scheduled",
+        }))
+      );
+      await supabase.from("matches").insert([
+        { sport_id: sportId, stage: "semi",   round: 1, order_idx: 25, status: "scheduled" },
+        { sport_id: sportId, stage: "semi",   round: 2, order_idx: 26, status: "scheduled" },
+        { sport_id: sportId, stage: "3lugar", round: 1, order_idx: 27, status: "scheduled" },
+        { sport_id: sportId, stage: "final",  round: 1, order_idx: 28, status: "scheduled" },
+      ]);
+
+      // Standings (idempotente)
       await supabase.rpc("seed_initial_standings", { p_sport_name: "FIFA", p_reset: true });
 
-      // 6) Pré-cria slots de quartas/semis/final (a função só preenche quando puder)
-      const { error: koErr } = await supabase.rpc("maybe_create_knockout", {
-        p_sport_name: "FIFA",
-      });
-      if (koErr) {
-        alert("Aviso: não consegui preparar as fases seguintes agora, mas os jogos de oitavas foram criados.");
-      }
-
-      alert("Chaveamento criado com sucesso!");
-      navigate("/admin");
+      alert("✅ Chaveamento criado com sucesso!\n\nVoltando para a tela de campeonatos…");
+      setTimeout(() => navigate("/admin/campeonatos"), 1200);
     } catch (err) {
       alert("Erro ao salvar: " + (err?.message || String(err)));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // ===== Fluxo 2: Gerar AUTOMATICAMENTE via RPC (usa nomes 'Player 1..32' com natsort) =====
+  const confirmAndGenerate = async () => {
+    if (!sportId) {
+      alert("Modalidade FIFA não encontrada.");
+      return;
+    }
+    if (teams.length !== 32) {
+      alert("É necessário ter exatamente 32 times cadastrados no FIFA para gerar automaticamente.");
+      return;
+    }
+
+    try {
+      setBusy(true);
+
+      const { error } = await supabase.rpc("admin_generate_fifa_oitavas32", {
+        p_sport_id: sportId,
+      });
+      if (error) throw error;
+
+      alert("✅ Partidas do FIFA geradas com sucesso!\n\nVoltando para a tela de campeonatos…");
+      setTimeout(() => navigate("/admin/campeonatos"), 1200);
+    } catch (err) {
+      console.error("Erro ao gerar partidas FIFA:", err);
+      alert("Erro ao gerar partidas: " + (err?.message || String(err)));
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -199,10 +237,26 @@ export default function FifaTournament() {
 
   return (
     <div className="space-y-6">
-      <h2 className="text-xl font-bold">Configuração do Campeonato de FIFA</h2>
-      <p className="text-sm text-gray-600">
-        Selecione um time e clique no slot A/B do jogo para alocar. Repita até preencher os 16 jogos.
-      </p>
+      <header className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-bold">Configuração do Campeonato de FIFA</h2>
+          <p className="text-sm text-gray-600">
+            Monte as oitavas (16 jogos). Ao confirmar, os jogos entram como <strong>scheduled</strong> com{" "}
+            <strong>order_idx</strong> fixo: assim, o Jogo 1 aparece em <em>⚠️ Compareçam</em> e o Jogo 2 como <em>Próximo</em>.
+          </p>
+        </div>
+
+        <button
+          onClick={confirmAndGenerate}
+          disabled={busy || !sportId}
+          title="Gera automaticamente J1..J16, placeholders J17..J28"
+          className={`text-xs px-3 py-1 rounded border transition ${
+            busy ? "opacity-60 cursor-not-allowed" : "hover:bg-gray-50"
+          }`}
+        >
+          Gerar automaticamente (RPC)
+        </button>
+      </header>
 
       <div className="grid md:grid-cols-2 gap-6">
         {/* Times disponíveis */}
@@ -216,7 +270,7 @@ export default function FifaTournament() {
                 <li
                   key={t.id}
                   className={`flex items-center gap-2 p-2 rounded cursor-pointer border ${
-                    selected.has(t.id) ? "bg-primary text-white" : "bg-gray-50 hover:bg-gray-100"
+                    selected.has(t.id) ? "bg-blue-600 text-white" : "bg-gray-50 hover:bg-gray-100"
                   }`}
                   onClick={() => toggleSelect(t.id)}
                   title={t.name}
@@ -229,7 +283,7 @@ export default function FifaTournament() {
           )}
         </div>
 
-        {/* Confrontos */}
+        {/* Confrontos (oitavas) */}
         <div className="border rounded p-4 overflow-y-auto max-h-[32rem]">
           <h3 className="font-semibold mb-2">Confrontos (oitavas)</h3>
           <ul className="space-y-4">
@@ -245,7 +299,9 @@ export default function FifaTournament() {
                       {home ? (
                         <>
                           <TeamBadge team={home} />
-                          <span className="truncate" title={home.name}>{home.name}</span>
+                          <span className="truncate" title={home.name}>
+                            {home.name}
+                          </span>
                           <button
                             className="text-xs text-red-600"
                             onClick={() => handleRemoveFromMatch(idx, "home")}
@@ -270,7 +326,9 @@ export default function FifaTournament() {
                       {away ? (
                         <>
                           <TeamBadge team={away} />
-                          <span className="truncate" title={away.name}>{away.name}</span>
+                          <span className="truncate" title={away.name}>
+                            {away.name}
+                          </span>
                           <button
                             className="text-xs text-red-600"
                             onClick={() => handleRemoveFromMatch(idx, "away")}
@@ -295,10 +353,13 @@ export default function FifaTournament() {
         </div>
       </div>
 
+      {/* Rodapé */}
       <div className="flex items-center justify-between gap-4">
         <div className="text-xs text-gray-600">
           {allFilled ? (
-            <span className="text-green-700">Todos os {MATCH_COUNT} confrontos estão prontos!</span>
+            <span className="text-green-700">
+              Todos os {MATCH_COUNT} confrontos estão prontos!
+            </span>
           ) : (
             <span>Restam {32 - assigned.size} times para alocar.</span>
           )}
@@ -306,18 +367,21 @@ export default function FifaTournament() {
 
         <button
           onClick={confirmBracket}
-          disabled={!allFilled}
+          disabled={!allFilled || busy}
           className={`px-6 py-3 rounded font-semibold transition ${
-            allFilled ? "bg-primary text-white hover:bg-primary/90" : "bg-gray-200 text-gray-500 cursor-not-allowed"
+            allFilled && !busy
+              ? "bg-blue-600 text-white hover:bg-blue-700"
+              : "bg-gray-200 text-gray-500 cursor-not-allowed"
           }`}
         >
-          Confirmar chaveamento
+          {busy ? "Processando..." : "Confirmar chaveamento"}
         </button>
       </div>
     </div>
   );
 }
 
+/* ======= Componentes auxiliares ======= */
 function TeamBadge({ team }) {
   const initials = getInitials(team?.name);
   const bg = team?.color || stringToColor(team?.name || "T");
@@ -341,7 +405,11 @@ function getInitials(name) {
 
 function stringToColor(str) {
   let hash = 0;
-  for (let i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash);
-  const color = ((Math.abs(hash)) % 0xffffff).toString(16).padStart(6, "0");
+  for (let i = 0; i < str.length; i++) {
+    // eslint-disable-next-line no-bitwise
+    hash = str.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  // eslint-disable-next-line no-bitwise
+  const color = ((hash >>> 0) % 0xffffff).toString(16).padStart(6, "0");
   return `#${color}`;
 }

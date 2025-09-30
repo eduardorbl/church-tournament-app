@@ -1,5 +1,5 @@
 // src/pages/admin/Matches.jsx
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, useMemo } from "react";
 import { supabase } from "../../supabaseClient";
 import TeamBadge from "../../components/TeamBadge";
 
@@ -14,7 +14,7 @@ const STATUS_LABELS = {
 };
 
 /**
- * ORDEM DE PRIORIDADE DOS STATUS (para ordenação)
+ * ORDEM DE PRIORIDADE DOS STATUS (para ordenação visual)
  */
 const STATUS_ORDER = {
   ongoing: 1,
@@ -45,51 +45,62 @@ function publicLogoUrl(raw) {
 
 // Formatar tempo em minutos:segundos baseado no tempo decorrido
 function formatGameTime(match, currentTimestamp) {
-  if (!match || match.status === 'scheduled' || match.status === 'finished') {
+  if (!match || match.status === "scheduled" || match.status === "finished") {
     return "0:00";
   }
-  
+
   const startTime = new Date(match.starts_at);
-  const currentTime = match.status === 'paused' 
-    ? new Date(match.updated_at) 
-    : new Date(currentTimestamp || Date.now());
-  
-  // Calcula diferença em milissegundos
+  const currentTime =
+    match.status === "paused"
+      ? new Date(match.updated_at)
+      : new Date(currentTimestamp || Date.now());
+
   const diffMs = currentTime - startTime;
-  
-  // Se a diferença for negativa (jogo ainda não começou), retorna 0:00
   if (diffMs < 0) return "0:00";
-  
-  // Converte para minutos e segundos
+
   const totalSeconds = Math.floor(diffMs / 1000);
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
-  
-  return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+
+  return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
 // Barra animada para jogos ao vivo/pausados
 function LiveProgressBar({ status }) {
   if (status !== "ongoing" && status !== "paused") return null;
-  
+
   const isOngoing = status === "ongoing";
   const barColor = isOngoing ? "bg-blue-500" : "bg-orange-500";
   const bgColor = isOngoing ? "bg-blue-100" : "bg-orange-100";
-  
+
   return (
     <div className={`absolute top-0 left-0 right-0 h-1 ${bgColor} overflow-hidden rounded-t-lg`}>
-      <div 
+      <div
         className={`h-full ${barColor}`}
         style={{
-          animation: isOngoing 
-            ? 'slideProgress 3s ease-in-out infinite' 
-            : 'none',
-          width: '100%'
+          animation: isOngoing ? "slideProgress 3s ease-in-out infinite" : "none",
+          width: "100%",
         }}
       />
     </div>
   );
 }
+
+// ---------- helpers de ordem / elegibilidade ----------
+const orderValue = (m) =>
+  Number.isFinite(Number(m?.order_idx))
+    ? Number(m.order_idx)
+    : Number.isFinite(Number(m?.round))
+    ? Number(m.round)
+    : Number(m?.id ?? Number.MAX_SAFE_INTEGER);
+
+const isEligibleToStart = (m) => {
+  if (m.status !== "scheduled") return false;
+  // Grupos: pode iniciar mesmo sem times definidos (em geral já tem)
+  if (m.group_name) return true;
+  // Mata-mata: só quando os dois times estiverem definidos
+  return Boolean(m.home?.id && m.away?.id);
+};
 
 export default function Matches() {
   const [matches, setMatches] = useState([]);
@@ -98,39 +109,36 @@ export default function Matches() {
   const [selectedStatus, setSelectedStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState({});
-  const [isAdmin, setIsAdmin] = useState(null); // só para aviso visual
+  const [isAdmin, setIsAdmin] = useState(null);
   const [lastError, setLastError] = useState(null);
   const [currentTimestamp, setCurrentTimestamp] = useState(Date.now());
-  
-  // ✅ Estado de conectividade
   const [isOnline, setIsOnline] = useState(navigator.onLine);
 
-  // mantém mensagens de erro visíveis por 8s, a menos que o usuário feche
+  const channelRef = useRef(null);
+  const mountedRef = useRef(true);
+  const timerRef = useRef(null);
+
+  // mantém mensagens de erro visíveis por 8s
   useEffect(() => {
     if (!lastError) return;
     const t = setTimeout(() => setLastError(null), 8000);
     return () => clearTimeout(t);
   }, [lastError]);
 
-  // ✅ Detectar conectividade
+  // Detectar conectividade
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
-    
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-    
+
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+
     return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
     };
   }, []);
 
-  const channelRef = useRef(null);
-  const mountedRef = useRef(true);
-  const timerRef = useRef(null);
-
-  /** ========= Helpers base ========= */
   const setMatchBusy = (id, v) =>
     setBusy((prev) => ({
       ...prev,
@@ -147,7 +155,6 @@ export default function Matches() {
     return data?.session || null;
   };
 
-  /** ========= Auth/Admin Check (apenas para aviso visual) ========= */
   const checkIsAdmin = async () => {
     try {
       await supabase.auth.getUser();
@@ -160,46 +167,6 @@ export default function Matches() {
     }
   };
 
-  useEffect(() => {
-    mountedRef.current = true;
-
-    (async () => {
-      await ensureSession();
-      await checkIsAdmin();
-      await loadSports();
-      await loadMatches();
-    })();
-
-    // Timer para atualizar o timestamp a cada segundo
-    timerRef.current = setInterval(() => {
-      setCurrentTimestamp(Date.now());
-    }, 1000);
-
-    const { data: sub } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      if (!mountedRef.current) return;
-      setIsAdmin(null);
-      await checkIsAdmin();
-      if (session) {
-        await loadSports();
-        await loadMatches();
-      } else {
-        setMatches([]);
-      }
-    });
-
-    return () => {
-      mountedRef.current = false;
-      if (timerRef.current) clearInterval(timerRef.current);
-      sub?.subscription?.unsubscribe?.();
-      if (channelRef.current) {
-        supabase.removeChannel(channelRef.current);
-        channelRef.current = null;
-      }
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  /** ========= Carregamentos ========= */
   const loadSports = async () => {
     const { data, error } = await supabase.from("sports").select("id,name").order("name");
     if (error) {
@@ -210,13 +177,15 @@ export default function Matches() {
   };
 
   const loadMatches = async () => {
+    if (!mountedRef.current) return;
+
     setLoading(true);
     try {
       let query = supabase
         .from("matches")
         .select(
           `
-          id, stage, round, group_name, starts_at, venue, created_at, updated_at,
+          id, stage, round, group_name, order_idx, starts_at, venue, created_at, updated_at,
           status, home_score, away_score, meta,
           home_team_id, away_team_id,
           sport:sport_id ( id, name ),
@@ -224,20 +193,17 @@ export default function Matches() {
           away:away_team_id ( id, name, logo_url, color )
         `
         );
-  
+
       if (selectedSport) query = query.eq("sport_id", selectedSport);
       if (selectedStatus) query = query.eq("status", selectedStatus);
-  
-      // 👇 esconde slots vazios de mata-mata
-      // esconde slots de mata-mata até os DOIS times estarem definidos
-      query = query.or(
-        "group_name.not.is.null,and(home_team_id.not.is.null,away_team_id.not.is.null)"
-      );
-  
+
+      // esconde slots vazios de mata-mata
+      query = query.or("group_name.not.is.null,and(home_team_id.not.is.null,away_team_id.not.is.null)");
+
       const { data, error } = await query;
       if (error) {
         console.error("loadMatches error:", error);
-        setLastError(error.message || "Falha ao carregar partidas.");
+        if (mountedRef.current) setLastError(error.message || "Falha ao carregar partidas.");
       } else {
         // Normaliza os logos das partidas
         const normalized = (data || []).map((m) => {
@@ -266,27 +232,80 @@ export default function Matches() {
           return { ...m, home, away };
         });
 
-        // Ordena por status: Em andamento, Pausado, Agendado, Encerrado
+        // Ordena por status (ao vivo > pausado > agendado > encerrado), depois por ordem da fila
         const sortedData = normalized.sort((a, b) => {
           const aOrder = STATUS_ORDER[a.status] || 999;
           const bOrder = STATUS_ORDER[b.status] || 999;
           if (aOrder !== bOrder) return aOrder - bOrder;
-          
-          // Se mesmo status, ordena por data de criação (mais recente primeiro)
-          return new Date(b.created_at || 0) - new Date(a.created_at || 0);
+
+          // mesma categoria -> ordem de execução
+          return orderValue(a) - orderValue(b);
         });
-        
-        setMatches(sortedData);
+
+        if (mountedRef.current) {
+          setMatches(sortedData);
+        }
       }
     } finally {
-      if (mountedRef.current) setLoading(false);
+      if (mountedRef.current) {
+        setLoading(false);
+      }
     }
-  };  
+  };
 
-  // (Re)carrega e assina realtime quando filtros mudarem
+  // Inicialização principal - executa apenas uma vez
   useEffect(() => {
+    mountedRef.current = true;
+
+    const initialize = async () => {
+      await ensureSession();
+      await checkIsAdmin();
+      await loadSports();
+      await loadMatches();
+    };
+
+    initialize();
+
+    // Timer para atualizar o timestamp a cada segundo
+    timerRef.current = setInterval(() => {
+      if (mountedRef.current) {
+        setCurrentTimestamp(Date.now());
+      }
+    }, 1000);
+
+    // Listener para mudanças de auth
+    const { data: sub } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (!mountedRef.current) return;
+
+      setIsAdmin(null);
+      await checkIsAdmin();
+
+      if (session) {
+        await loadSports();
+        await loadMatches();
+      } else {
+        setMatches([]);
+      }
+    });
+
+    return () => {
+      mountedRef.current = false;
+      if (timerRef.current) clearInterval(timerRef.current);
+      sub?.subscription?.unsubscribe?.();
+      if (channelRef.current) {
+        supabase.removeChannel(channelRef.current);
+        channelRef.current = null;
+      }
+    };
+  }, []); // Array vazio - executa apenas uma vez
+
+  // Effect separado para recarregar quando filtros mudarem
+  useEffect(() => {
+    if (!mountedRef.current) return;
+
     loadMatches();
 
+    // Setup realtime
     if (channelRef.current) {
       supabase.removeChannel(channelRef.current);
       channelRef.current = null;
@@ -294,18 +313,13 @@ export default function Matches() {
 
     const channel = supabase
       .channel("admin-matches")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "matches" },
-        () => {
-          // ✅ Pequeno delay para evitar múltiplas atualizações simultâneas
-          setTimeout(() => {
-            if (mountedRef.current) {
-              loadMatches();
-            }
-          }, 200);
-        }
-      )
+      .on("postgres_changes", { event: "*", schema: "public", table: "matches" }, () => {
+        setTimeout(() => {
+          if (mountedRef.current) {
+            loadMatches();
+          }
+        }, 200);
+      })
       .subscribe();
 
     channelRef.current = channel;
@@ -313,179 +327,84 @@ export default function Matches() {
     return () => {
       if (channelRef.current) {
         supabase.removeChannel(channelRef.current);
+        channelRef.current = null;
       }
-      channelRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedSport, selectedStatus]);
+  }, [selectedSport, selectedStatus]); // Só depende dos filtros
 
-  /** ========= Mutação otimizada ========= */
-  const mutate = async (id, patch, after = null) => {
+  // ---------- cálculo dos jogos liberados para iniciar ----------
+  // Regra: por modalidade (sport_id), se houver jogo ongoing/paused, NENHUM pode iniciar.
+  // Do contrário, somente o scheduled elegível com menor ordem pode iniciar.
+  const allowedStartIds = useMemo(() => {
+    const mapBySport = new Map();
+    for (const m of matches) {
+      const sid = m?.sport?.id ?? m.sport_id ?? "unknown";
+      if (!mapBySport.has(sid)) mapBySport.set(sid, []);
+      mapBySport.get(sid).push(m);
+    }
+
+    const allowed = new Set();
+
+    for (const [sid, arr] of mapBySport.entries()) {
+      const hasActive = arr.some((x) => x.status === "ongoing" || x.status === "paused");
+      if (hasActive) continue; // bloqueia todo mundo enquanto houver partida ativa
+
+      const eligible = arr.filter(isEligibleToStart);
+      if (!eligible.length) continue;
+
+      eligible.sort((a, b) => orderValue(a) - orderValue(b));
+      allowed.add(eligible[0].id); // só o próximo
+    }
+    return allowed;
+  }, [matches]);
+
+  const mutate = async (id, patch) => {
     setMatchBusy(id, true);
     setLastError(null);
-    
-    // ✅ 1. ATUALIZAÇÃO OTIMISTA - Aplica mudança imediatamente na UI
-    const originalMatch = matches.find(m => m.id === id);
-    if (originalMatch) {
-      setMatches(prev => prev.map(m => 
-        m.id === id ? { ...m, ...patch } : m
-      ));
-    }
-    
+
+    // 🔵 1) UI OTIMISTA
+    const prev = matches;
+    setMatches((cur) => cur.map((m) => (m.id === id ? { ...m, ...patch } : m)));
+
     try {
-      // ✅ 2. VALIDAÇÕES RÁPIDAS - Fail fast
-      const session = await ensureSession();
-      if (!session) {
-        throw new Error("Você precisa estar autenticado para realizar esta ação.");
-      }
-      
-      if (isAdmin === false) {
-        throw new Error("Somente administradores podem alterar partidas.");
-      }
-
-      // ✅ 3. VALIDAÇÃO DE ID UUID
-      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-      if (!uuidRegex.test(id)) {
-        throw new Error('ID da partida inválido.');
-      }
-
-      // ✅ 4. SANITIZAÇÃO DO PATCH - Mais eficiente
-      const cleanPatch = sanitizePatch(patch);
-      
-      // ✅ 5. UPDATE NO BANCO - Sem select desnecessário
       const { error } = await supabase
         .from("matches")
-        .update(cleanPatch)
+        .update(patch)
         .eq("id", id);
 
-      if (error) {
-        // Reverte a mudança otimista em caso de erro
-        if (originalMatch) {
-          setMatches(prev => prev.map(m => 
-            m.id === id ? originalMatch : m
-          ));
-        }
-        
-        throw new Error(`Falha ao atualizar: ${error.message}`);
-      }
+      if (error) throw new Error(`Falha ao atualizar: ${error.message}`);
 
-      // ✅ 6. CALLBACK PÓS-SUCESSO
-      if (after) {
-        try {
-          await after();
-        } catch (callbackError) {
-          console.warn('Erro no callback após mutação:', callbackError);
-        }
-      }
+      // 🟢 2) Fallback: se por algum motivo o realtime não vier, garantimos um refresh rápido
+      setTimeout(() => {
+        if (mountedRef.current) loadMatches();
+      }, 600);
 
       return true;
-
-    } catch (error) {
-      console.error('Erro na mutação:', error);
-      
-      // Reverte mudança otimista em caso de erro
-      if (originalMatch) {
-        setMatches(prev => prev.map(m => 
-          m.id === id ? originalMatch : m
-        ));
-      }
-      
-      setLastError(error.message || "Erro ao atualizar partida.");
+    } catch (e) {
+      // 🔴 Reverte UI otimista em caso de erro
+      setMatches(prev);
+      setLastError(e.message || "Erro ao atualizar partida.");
       return false;
-      
     } finally {
       setMatchBusy(id, false);
-      // ✅ 7. REMOVIDO O RELOAD AUTOMÁTICO - O realtime vai sincronizar
-      // O realtime channel já vai atualizar os dados quando necessário
     }
   };
 
-  // ✅ FUNÇÃO AUXILIAR PARA SANITIZAÇÃO
-  const sanitizePatch = (patch) => {
-    const cleanPatch = {};
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-    
-    for (const [key, value] of Object.entries(patch)) {
-      // Detecta UUIDs em valores que não deveriam tê-los
-      if (typeof value === 'string' && uuidRegex.test(value) && !key.includes('_id')) {
-        throw new Error(`Campo ${key} contém UUID inválido: ${value}`);
-      }
-      
-      switch (key) {
-        case 'home_score':
-        case 'away_score':
-          if (value === null || value === undefined) {
-            cleanPatch[key] = 0;
-          } else {
-            const numValue = Number(value);
-            if (isNaN(numValue) || numValue < 0) {
-              throw new Error(`${key} deve ser um número positivo.`);
-            }
-            cleanPatch[key] = Math.floor(numValue);
-          }
-          break;
-          
-        case 'status':
-          const validStatuses = ['scheduled', 'ongoing', 'paused', 'finished'];
-          if (!validStatuses.includes(value)) {
-            throw new Error(`Status deve ser: ${validStatuses.join(', ')}`);
-          }
-          cleanPatch[key] = value;
-          break;
-          
-        case 'starts_at':
-          if (value === null || value === undefined) {
-            cleanPatch[key] = null;
-          } else {
-            try {
-              new Date(value).toISOString();
-              cleanPatch[key] = value;
-            } catch {
-              throw new Error('starts_at deve ser uma data válida.');
-            }
-          }
-          break;
-          
-        case 'meta':
-          if (value === null || value === undefined) {
-            cleanPatch[key] = {};
-          } else if (typeof value === 'object' && !Array.isArray(value)) {
-            cleanPatch[key] = value;
-          } else {
-            throw new Error('meta deve ser um objeto.');
-          }
-          break;
-          
-        default:
-          cleanPatch[key] = value;
-      }
-    }
-    
-    return cleanPatch;
-  };
 
-  /** ========= Placar ========= */
   const changePoints = async (m, team, action) => {
-    // Não permite alterar placar de jogos agendados (ainda não iniciados)
     if (m.status === "scheduled") return;
-    
+
     const key = `${team}_score`;
     let next = Math.max(0, Number(m[key] || 0));
-    
+
     if (action === "inc") next += 1;
     if (action === "dec") next = Math.max(0, next - 1);
     if (action === "reset") next = 0;
-    
+
     const patch = { [key]: next };
-    
-    // ✅ Usar debounce para múltiplas alterações rápidas
-    clearTimeout(window[`debounce_${m.id}_${key}`]);
-    window[`debounce_${m.id}_${key}`] = setTimeout(() => {
-      mutate(m.id, patch);
-    }, 100); // 100ms de debounce
+    await mutate(m.id, patch);
   };
 
-  /** ========= Sets (Vôlei) ========= */
   const getSets = (m, side) => {
     const meta = m.meta || {};
     const key = side === "home" ? "home_sets" : "away_sets";
@@ -493,39 +412,75 @@ export default function Matches() {
   };
 
   const changeSets = async (m, team, action) => {
-    // Não permite alterar sets de jogos agendados (ainda não iniciados)
     if (m.status === "scheduled") return;
-    
+
     const meta = m.meta || {};
     const key = team === "home" ? "home_sets" : "away_sets";
     let value = Math.max(0, Number(meta[key] || 0));
     if (action === "inc") value += 1;
     if (action === "dec") value = Math.max(0, value - 1);
     if (action === "reset") value = 0;
-    
-    // ✅ Debounce para sets também
-    clearTimeout(window[`debounce_sets_${m.id}_${key}`]);
-    window[`debounce_sets_${m.id}_${key}`] = setTimeout(() => {
-      mutate(m.id, { meta: { ...meta, [key]: value } });
-    }, 100);
+
+    await mutate(m.id, { meta: { ...meta, [key]: value } });
   };
 
-  /** ========= Status ========= */
   const applyStatusChange = async (m, newStatus) => {
-    const patch = { status: newStatus };
-    
-    // Se está mudando para 'ongoing', definir starts_at como agora
-    if (newStatus === "ongoing" && m.status === "scheduled") {
-      patch.starts_at = new Date().toISOString();
+    const now = new Date().toISOString();
+    const patch = {
+      status: newStatus,
+      updated_at: now,         // 🔧 força atualização visual e evento realtime
+    };
+    if (newStatus === "ongoing" && m.status === "scheduled" && !m.starts_at) {
+      patch.starts_at = now;   // garante relógio do jogo
     }
-    
-    console.log(`🔄 Mudando status de ${m.status} para ${newStatus}`, { matchId: m.id, patch });
-    
     return await mutate(m.id, patch);
   };
 
+  // ---------- guarda de fila no clique ----------
+  const tryStartMatch = async (m) => {
+    setLastError(null);
+    const sid = m?.sport?.id ?? m.sport_id;
+    if (!sid) {
+      setLastError("Partida sem modalidade definida.");
+      return;
+    }
+
+    try {
+      // Revalida no servidor (evita corrida)
+      const { data: sameSport, error } = await supabase
+        .from("matches")
+        .select("id,status,group_name,order_idx,round,home_team_id,away_team_id")
+        .eq("sport_id", sid);
+
+      if (error) throw error;
+      if (!sameSport) throw new Error("Falha ao validar ordem.");
+
+      const active = sameSport.some((x) => x.status === "ongoing" || x.status === "paused");
+      if (active) throw new Error("Já existe uma partida em andamento/pausada nesta modalidade. Encerre-a antes de iniciar outra.");
+
+      const eligible = sameSport.filter((x) => {
+        if (x.status !== "scheduled") return false;
+        if (x.group_name) return true;
+        return Boolean(x.home_team_id && x.away_team_id);
+      });
+
+      if (!eligible.length) throw new Error("Não há partidas elegíveis para iniciar.");
+
+      eligible.sort((a, b) => orderValue(a) - orderValue(b));
+      const nextId = eligible[0].id;
+
+      if (nextId !== m.id) throw new Error("Você só pode iniciar o próximo jogo da fila.");
+
+      await applyStatusChange(m, "ongoing");
+    } catch (e) {
+      console.error("tryStartMatch error:", e);
+      setLastError(e.message || "Não foi possível iniciar a partida (ordem restrita).");
+    }
+  };
+
   const startMatch = async (m) => {
-    await applyStatusChange(m, "ongoing");
+    // passa pelo guard de fila (não chama applyStatusChange direto)
+    await tryStartMatch(m);
   };
 
   const pauseMatch = async (m) => {
@@ -544,7 +499,6 @@ export default function Matches() {
     <div className="space-y-6">
       <h2 className="text-xl font-bold">Gerenciar Partidas</h2>
 
-      {/* ✅ Aviso de conectividade */}
       {!isOnline && (
         <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-2 rounded mb-4">
           ⚠️ Você está offline. As alterações serão sincronizadas quando a conexão for restaurada.
@@ -553,8 +507,7 @@ export default function Matches() {
 
       {isAdmin === false && (
         <div className="text-sm p-3 rounded bg-red-50 border border-red-200 text-red-700">
-          Você não está autenticado como <strong>admin</strong>. As ações podem ser bloqueadas pelas{" "}
-          <strong>RLS policies</strong>.
+          Você não está autenticado como <strong>admin</strong>. As ações podem ser bloqueadas.
         </div>
       )}
 
@@ -564,7 +517,6 @@ export default function Matches() {
           <button
             onClick={() => setLastError(null)}
             className="text-xs px-2 py-1 rounded border border-yellow-300 hover:bg-yellow-100"
-            title="Fechar alerta"
           >
             Fechar
           </button>
@@ -579,7 +531,7 @@ export default function Matches() {
             <button
               onClick={() => setSelectedSport(null)}
               className={`px-2 py-1 rounded text-xs ${
-                !selectedSport ? "bg-primary text-white" : "bg-gray-100 hover:bg-gray-200"
+                !selectedSport ? "bg-blue-600 text-white" : "bg-gray-100 hover:bg-gray-200"
               }`}
             >
               Todas
@@ -589,7 +541,7 @@ export default function Matches() {
                 key={s.id}
                 onClick={() => setSelectedSport(s.id)}
                 className={`px-2 py-1 rounded text-xs ${
-                  selectedSport === s.id ? "bg-primary text-white" : "bg-gray-100 hover:bg-gray-200"
+                  selectedSport === s.id ? "bg-blue-600 text-white" : "bg-gray-100 hover:bg-gray-200"
                 }`}
               >
                 {s.name}
@@ -604,7 +556,7 @@ export default function Matches() {
             <button
               onClick={() => setSelectedStatus(null)}
               className={`px-2 py-1 rounded text-xs ${
-                !selectedStatus ? "bg-primary text-white" : "bg-gray-100 hover:bg-gray-200"
+                !selectedStatus ? "bg-blue-600 text-white" : "bg-gray-100 hover:bg-gray-200"
               }`}
             >
               Todos
@@ -614,7 +566,7 @@ export default function Matches() {
                 key={value}
                 onClick={() => setSelectedStatus(value)}
                 className={`px-2 py-1 rounded text-xs ${
-                  selectedStatus === value ? "bg-primary text-white" : "bg-gray-100 hover:bg-gray-200"
+                  selectedStatus === value ? "bg-blue-600 text-white" : "bg-gray-100 hover:bg-gray-200"
                 }`}
               >
                 {label}
@@ -640,23 +592,22 @@ export default function Matches() {
             const homeSets = isVolei ? getSets(m, "home") : 0;
             const awaySets = isVolei ? getSets(m, "away") : 0;
 
-            // knockout = partidas sem group_name (semi/final/3º)
             const isKnockout = !m.group_name;
             const hasBothTeams = Boolean(m.home?.id && m.away?.id);
-            // pode iniciar grupos sempre; em mata-mata só quando ambos os times existem
-            const canStart = isKnockout ? hasBothTeams : true;
+            const canStartByTeams = isKnockout ? hasBothTeams : true;
 
             const isLive = m.status === "ongoing" || m.status === "paused";
-            const cardBorder = isLive 
-              ? m.status === "ongoing" 
-                ? "border-blue-200" 
-                : "border-orange-200"
-              : "border-gray-200";
+            const cardBorder = isLive ? (m.status === "ongoing" ? "border-blue-200" : "border-orange-200") : "border-gray-200";
+
+            const isNextInQueue = allowedStartIds.has(m.id);
 
             return (
-              <li key={m.id} className={`border rounded-lg p-3 sm:p-4 flex flex-col gap-3 bg-white shadow-sm relative overflow-hidden ${cardBorder}`}>
+              <li
+                key={m.id}
+                className={`border rounded-lg p-3 sm:p-4 flex flex-col gap-3 bg-white shadow-sm relative overflow-hidden ${cardBorder}`}
+              >
                 <LiveProgressBar status={m.status} />
-                
+
                 {/* Cabeçalho */}
                 <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
                   <div className="text-xs text-gray-500 flex flex-wrap items-center gap-1 sm:gap-2">
@@ -670,22 +621,30 @@ export default function Matches() {
                       </span>
                     )}
                   </div>
-                  <span
-                    className={`text-xs px-2 py-0.5 rounded self-start sm:self-auto ${
-                      m.status === "ongoing"
-                        ? "bg-green-100 text-green-700"
-                        : m.status === "paused"
-                        ? "bg-yellow-100 text-yellow-700"
-                        : m.status === "finished"
-                        ? "bg-gray-200 text-gray-600"
-                        : "bg-blue-100 text-blue-700"
-                    }`}
-                  >
-                    {STATUS_LABELS[m.status] || m.status}
-                  </span>
+
+                  <div className="flex items-center gap-2">
+                    {m.status === "scheduled" && isNextInQueue && (
+                      <span className="text-[10px] px-2 py-0.5 rounded bg-indigo-100 text-indigo-700 uppercase tracking-wide">
+                        Próximo na ordem
+                      </span>
+                    )}
+                    <span
+                      className={`text-xs px-2 py-0.5 rounded self-start sm:self-auto ${
+                        m.status === "ongoing"
+                          ? "bg-green-100 text-green-700"
+                          : m.status === "paused"
+                          ? "bg-yellow-100 text-yellow-700"
+                          : m.status === "finished"
+                          ? "bg-gray-200 text-gray-600"
+                          : "bg-blue-100 text-blue-700"
+                      }`}
+                    >
+                      {STATUS_LABELS[m.status] || m.status}
+                    </span>
+                  </div>
                 </div>
 
-                {/* Linha dos times com placar e sets (para Vôlei) */}
+                {/* Times com placar */}
                 <div className="space-y-3 sm:space-y-0 sm:grid sm:grid-cols-2 sm:gap-4">
                   <TeamDisplay
                     align="left"
@@ -720,8 +679,15 @@ export default function Matches() {
                   {m.status === "scheduled" && (
                     <button
                       onClick={() => startMatch(m)}
-                      disabled={busy[m.id] || !canStart}
+                      disabled={busy[m.id] || !canStartByTeams || !allowedStartIds.has(m.id)}
                       className="px-3 py-1 text-xs rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-50"
+                      title={
+                        !canStartByTeams
+                          ? "Defina as duas equipes antes de iniciar (mata-mata)."
+                          : allowedStartIds.has(m.id)
+                          ? "Iniciar próximo jogo da ordem."
+                          : "Aguarde: apenas o próximo jogo da ordem pode iniciar."
+                      }
                     >
                       Iniciar
                     </button>
@@ -763,7 +729,9 @@ export default function Matches() {
                     </>
                   )}
                   {m.status === "finished" && (
-                    <span className="text-xs text-gray-500 self-center">Partida encerrada (resultado editável).</span>
+                    <span className="text-xs text-gray-500 self-center">
+                      Partida encerrada (resultado editável).
+                    </span>
                   )}
                 </div>
               </li>
@@ -774,9 +742,15 @@ export default function Matches() {
 
       <style jsx global>{`
         @keyframes slideProgress {
-          0% { transform: translateX(-100%); }
-          50% { transform: translateX(200%); }
-          100% { transform: translateX(-100%); }
+          0% {
+            transform: translateX(-100%);
+          }
+          50% {
+            transform: translateX(200%);
+          }
+          100% {
+            transform: translateX(-100%);
+          }
         }
       `}</style>
     </div>
@@ -799,7 +773,7 @@ function TeamDisplay({
   align = "left",
 }) {
   const right = align === "right";
-  
+
   return (
     <div className={`border rounded p-3 space-y-3 ${right ? "" : ""}`}>
       {/* Nome do time */}

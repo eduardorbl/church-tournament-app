@@ -297,96 +297,87 @@ export default function Live() {
   const [loading, setLoading] = useState(true);
   const [bySport, setBySport] = useState({});
   const [currentTimestamp, setCurrentTimestamp] = useState(Date.now());
-  const channelRef = useRef(null);
-  const timerRef = useRef(null);
 
   const loadAll = async () => {
-    setLoading(true);
+    try {
+      setLoading(true);
+      
+      console.log('🔄 Carregando partidas ao vivo...');
 
-    const { data, error } = await supabase
-      .from("matches")
-      .select(`
-        id,
-        sport:sport_id ( id, name ),
-        stage, round, group_name,
-        starts_at, updated_at, venue, status, meta,
-        home_score, away_score,
-        home:home_team_id ( id, name, logo_url, color ),
-        away:away_team_id ( id, name, logo_url, color )
-      `)
-      .in("status", LIVE_STATUSES)
-      .order("updated_at", { ascending: false, nullsFirst: true });
+      const { data, error } = await supabase
+        .from("matches")
+        .select(`
+          id,
+          sport:sport_id ( id, name ),
+          stage, round, group_name,
+          starts_at, updated_at, venue, status, meta,
+          home_score, away_score,
+          home:home_team_id ( id, name, logo_url, color ),
+          away:away_team_id ( id, name, logo_url, color )
+        `)
+        .in("status", LIVE_STATUSES)
+        .order("starts_at", { ascending: true, nullsFirst: true });
 
-    if (error) {
-      console.error(error);
+      if (error) {
+        console.error('Erro ao carregar partidas ao vivo:', error);
+        setBySport({});
+        return;
+      }
+
+      const grouped = {};
+      for (const m of data || []) {
+        const sportName = m.sport?.name || "Outros";
+        if (!grouped[sportName]) grouped[sportName] = [];
+
+        const normalizedMatch = {
+          ...m,
+          home: m.home && typeof m.home === "object"
+            ? {
+                ...m.home,
+                logo_url: (() => {
+                  const url = publicLogoUrl(m.home.logo_url);
+                  return url ? `${url}${url.includes("?") ? "&" : "?"}v=1` : null;
+                })(),
+              }
+            : m.home,
+          away: m.away && typeof m.away === "object"
+            ? {
+                ...m.away,
+                logo_url: (() => {
+                  const url = publicLogoUrl(m.away.logo_url);
+                  return url ? `${url}${url.includes("?") ? "&" : "?"}v=1` : null;
+                })(),
+              }
+            : m.away,
+        };
+        
+        grouped[sportName].push(normalizedMatch);
+      }
+      
+      setBySport(grouped);
+      console.log('✅ Partidas ao vivo carregadas com sucesso');
+    } catch (error) {
+      console.error('Erro inesperado ao carregar dados:', error);
       setBySport({});
+    } finally {
       setLoading(false);
-      return;
     }
-
-    const grouped = {};
-    for (const m of data || []) {
-      const sportName = m.sport?.name || "Outros";
-      if (!grouped[sportName]) grouped[sportName] = [];
-      
-      // Normaliza os logos das partidas
-      const normalizedMatch = {
-        ...m,
-        home: m.home && typeof m.home === "object"
-          ? {
-              ...m.home,
-              logo_url: (() => {
-                const url = publicLogoUrl(m.home.logo_url);
-                return url ? `${url}${url.includes("?") ? "&" : "?"}v=1` : null;
-              })(),
-            }
-          : m.home,
-        away: m.away && typeof m.away === "object"
-          ? {
-              ...m.away,
-              logo_url: (() => {
-                const url = publicLogoUrl(m.away.logo_url);
-                return url ? `${url}${url.includes("?") ? "&" : "?"}v=1` : null;
-              })(),
-            }
-          : m.away,
-      };
-      
-      grouped[sportName].push(normalizedMatch);
-    }
-    setBySport(grouped);
-    setLoading(false);
   };
 
+  // UseEffect SIMPLIFICADO - executa apenas uma vez
   useEffect(() => {
+    // Carrega dados imediatamente
     loadAll();
 
-    // Timer para atualizar o timestamp a cada segundo
-    timerRef.current = setInterval(() => {
+    // Timer simples para atualizar timestamp
+    const timer = setInterval(() => {
       setCurrentTimestamp(Date.now());
     }, 1000);
 
-    // Realtime: qualquer mudança em matches → recarregar
-    if (channelRef.current) {
-      supabase.removeChannel(channelRef.current);
-      channelRef.current = null;
-    }
-    const channel = supabase
-      .channel("home-live")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "matches" },
-        () => loadAll()
-      )
-      .subscribe();
-
-    channelRef.current = channel;
     return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-      if (channelRef.current) supabase.removeChannel(channelRef.current);
-      channelRef.current = null;
+      clearInterval(timer);
     };
-  }, []);
+  }, []); // Array vazio - executa apenas UMA vez
 
   // Ordena seções por esporte com ordem preferida
   const sportNames = useMemo(() => {
