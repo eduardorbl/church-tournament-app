@@ -665,6 +665,15 @@ export default function Volei() {
   }, [sportId, loadAll]);  
 
   useEffect(() => {
+    if (!loading) {
+      const computed = computeStandingsFromMatchesVolley(matches, teamsRef.current);
+      if (computed.length) {
+        setStandings(computed);
+      }
+    }
+  }, [loading, matches, teamsById]);
+
+  useEffect(() => {
     if (!loading && standings.length === 0 && matches.length > 0) {
       const computed = computeStandingsFromMatchesVolley(matches, teamsRef.current);
       if (computed.length) {
