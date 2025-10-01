@@ -253,8 +253,7 @@ function StandingsTable({ standings, teamsById }) {
                 <th className="py-1 text-left">Time</th>
                 <th className="w-10 py-1 text-center">P</th>
                 <th className="w-10 py-1 text-center">V</th>
-                <th className="w-10 py-1 text-center">E</th>
-                <th className="w-10 py-1 text-center">D</th>
+                <th className="w-10 py-1 text-center">E</th>                <th className="w-10 py-1 text-center">D</th>
                 <th className="w-10 py-1 text-center">GP</th>
                 <th className="w-10 py-1 text-center">GC</th>
                 <th className="w-12 py-1 text-center">+/-</th>
@@ -376,6 +375,36 @@ class ErrorBoundary extends React.Component {
 }
 
 /* ── Página — Pebolim (Hub) ───────────────────────────────────────────────── */
+// Normalização de texto
+const norm = (s) =>
+  typeof s === "string"
+    ? s.normalize("NFD").replace(/\p{Diacritic}/gu, "").trim().toLowerCase()
+    : "";
+// Unifica fase
+const normStage = (s) => {
+  const m = norm(s);
+  if (m === "semifinal" || m === "semi-final" || m === "semis") return "semi";
+  if (m === "3º lugar" || m === "3lugar" || m === "3-lugar" || m === "terceiro") return "3lugar";
+  return m;
+};
+// Unifica status
+const normStatus = (s) => {
+  const m = norm(s);
+  if (m === "agendado" || m === "programado" || m === "scheduled") return "scheduled";
+  if (m === "ao vivo" || m === "andamento" || m === "live" || m === "ongoing") return "ongoing";
+  if (m === "pausado" || m === "paused") return "paused";
+  if (m === "encerrado" || m === "finalizado" || m === "finished") return "finished";
+  return m || "scheduled";
+};
+// Escolhe chave de ordem segura
+const safeOrder = (r) => {
+  const oi = Number(r.order_idx);
+  const rd = Number(r.round);
+  if (Number.isFinite(oi)) return oi;
+  if (Number.isFinite(rd)) return rd;
+  return r.id;
+};
+
 export default function Pebolim() {
   const [sportId, setSportId] = useState(null);
   const [teamsById, setTeamsById] = useState({});
@@ -466,24 +495,20 @@ export default function Pebolim() {
   const loadMatches = useCallback(async (sid) => {
     try {
       if (!sid) { setMatches([]); return; }
-  
+
       const { data, error } = await supabase
         .from("matches")
         .select(`
-          id, sport_id,
-          stage, round, group_name, starts_at, updated_at, venue, status,
-          home_team_id, away_team_id, home_score, away_score
+          id, sport_id, stage, round, group_name, starts_at, updated_at, venue, status, home_score, away_score, order_idx,
+          home:home_team_id ( id, name, logo_url, color ),
+          away:away_team_id ( id, name, logo_url, color )
         `)
         .eq("sport_id", sid);
-  
       if (error) throw error;
-  
-      const mkTeam = (id) => (id ? ({ ...(teamsRef.current[id] || {}), id, name: String((teamsRef.current[id]?.name ?? "A definir")) }) : null);
-  
       const rows = (data || []).map((r) => ({
         id: r.id,
         sport_id: r.sport_id,
-        order_idx: safeOrder(r),
+        order_idx: Number.isFinite(Number(r.order_idx)) ? Number(r.order_idx) : null,
         stage: normStage(r.stage),
         round: r.round,
         group_name: r.group_name,
@@ -493,17 +518,15 @@ export default function Pebolim() {
         status: normStatus(r.status),
         home_score: r.home_score,
         away_score: r.away_score,
-        home: mkTeam(r.home_team_id),
-        away: mkTeam(r.away_team_id),
+        home: r.home ? { ...r.home, logo_url: normalizeLogo(r.home.logo_url) } : null,
+        away: r.away ? { ...r.away, logo_url: normalizeLogo(r.away.logo_url) } : null,
       }));
-  
       const phaseRank = { grupos: 1, oitavas: 2, quartas: 3, semi: 4, "3lugar": 5, final: 6 };
       const ord = (x) => (Number.isFinite(Number(x?.order_idx)) ? Number(x.order_idx) : Number.MAX_SAFE_INTEGER);
-  
       rows.sort((a, b) =>
-        (phaseRank[a.stage] ?? 99) - (phaseRank[b.stage] ?? 99) || ord(a) - ord(b)
+        (phaseRank[a.stage] ?? 99) - (phaseRank[b.stage] ?? 99) ||
+        ord(a) - ord(b)
       );
-  
       setMatches(rows);
       console.info("[Pebolim] rows:", rows.length, rows.slice(0, 2));
     } catch (e) {
@@ -517,7 +540,8 @@ export default function Pebolim() {
     async (sid, { skeleton = false } = {}) => {
       if (skeleton) setLoading(true);
       try {
-        await Promise.all([loadTeams(sid), loadStandings(sid), loadMatches(sid)]);
+        await loadTeams(sid); // times antes de matches
+        await Promise.all([loadStandings(sid), loadMatches(sid)]);
       } finally {
         if (skeleton) setLoading(false);
       }
@@ -582,10 +606,16 @@ export default function Pebolim() {
   }, [matches]);
 
   const scheduledAll = useMemo(() => {
-    let arr = (matches || []).filter((m) => m.status === "scheduled");
+    let arr = (matches || []).filter((m) => m.status === "scheduled" && m.home?.id && m.away?.id);
     if (groupFilter !== "todos") arr = arr.filter((m) => m.group_name === groupFilter);
     if (stageFilter !== "todos") arr = arr.filter((m) => m.stage === stageFilter);
-    arr.sort((a, b) => (ts(a.starts_at) - ts(b.starts_at)) || ((a.order_idx ?? 1) - (b.order_idx ?? 1)));
+    arr.sort((a, b) => {
+      const ta = ts(a.starts_at), tb = ts(b.starts_at);
+      const tcmp = Number.isFinite(ta - tb) ? ta - tb : 0;
+      return tcmp ||
+        (Number(a.order_idx ?? Number.MAX_SAFE_INTEGER) - Number(b.order_idx ?? Number.MAX_SAFE_INTEGER)) ||
+        (a.id - b.id);
+    });
     return arr;
   }, [matches, groupFilter, stageFilter]);
 

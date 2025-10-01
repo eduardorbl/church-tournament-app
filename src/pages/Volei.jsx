@@ -338,8 +338,7 @@ const safeOrder = (r) => {
 };
 
 function computeStandingsFromMatchesVolley(matches, teamsById) {
-  // Vamos montar linhas por grupo, mas se não houver group_name, usamos "-" como único grupo.
-  const rows = new Map(); // key: `${group}::${teamId}` -> row
+  const rows = new Map();
   const key = (g, id) => `${g}::${id}`;
   const getRow = (g, id) => {
     const k = key(g, id);
@@ -360,59 +359,48 @@ function computeStandingsFromMatchesVolley(matches, teamsById) {
     }
     return rows.get(k);
   };
-
-  const teamIdsSeen = new Set();
-
+  // 1) Seed: todo time que aparece em QUALQUER match entra zerado no grupo correto
+  const teamIdsSeeded = new Set();
   for (const m of matches || []) {
+    const g = m?.group_name || "-";
+    const hid = m?.home?.id;
+    const aid = m?.away?.id;
+    if (hid) { getRow(g, hid); teamIdsSeeded.add(hid); }
+    if (aid) { getRow(g, aid); teamIdsSeeded.add(aid); }
+  }
+  // 2) Acúmulo: só conta estatísticas para "finished"
+  for (const m of matches || []) {
+    if (m?.status !== "finished") continue;
+    const g = m?.group_name || "-";
     const hid = m?.home?.id;
     const aid = m?.away?.id;
     if (!hid || !aid) continue;
-
-    teamIdsSeen.add(hid);
-    teamIdsSeen.add(aid);
-
-    // usa "-" como grupo padrão se não vier nada
-    const g = m?.group_name || "-";
     const hr = getRow(g, hid);
     const ar = getRow(g, aid);
-
-    // Só contabiliza estatísticas quando estiver "finished"
-    if (m?.status !== "finished") continue;
-
     const hs = Number(m?.meta?.home_sets ?? 0);
     const as = Number(m?.meta?.away_sets ?? 0);
     const hp = Number(m?.home_score ?? 0);
     const ap = Number(m?.away_score ?? 0);
-
     let homeWin = false, awayWin = false;
     if (hs !== as) { homeWin = hs > as; awayWin = !homeWin; }
     else if (hp !== ap) { homeWin = hp > ap; awayWin = !homeWin; }
-
     hr.matches_played++; ar.matches_played++;
     hr.sv += hs; hr.sp += as; hr.pf += hp; hr.pa += ap;
     ar.sv += as; ar.sp += hs; ar.pf += ap; ar.pa += hp;
-
     if (homeWin) { hr.wins++; hr.points += 3; ar.losses++; }
     else if (awayWin) { ar.wins++; ar.points += 3; hr.losses++; }
   }
-
-  // Se não houve nenhuma partida encerrada, ainda assim garantimos linhas zeradas:
-  if (rows.size === 0 && teamIdsSeen.size > 0) {
-    for (const id of teamIdsSeen) getRow("-", id);
+  // 3) Times cadastrados que não aparecem em match nenhum → grupo "-"
+  for (const id of Object.keys(teamsById || {})) {
+    if (!teamIdsSeeded.has(Number(id)) && !teamIdsSeeded.has(id)) {
+      getRow("-", id);
+    }
   }
-
-  // Último fallback: nem matches, mas temos times carregados → mostra tabela zerada com todos os times
-  if (rows.size === 0 && teamsById && Object.keys(teamsById).length > 0) {
-    for (const id of Object.keys(teamsById)) getRow("-", id);
-  }
-
-  // Agrupa e ranqueia por grupo (usando o mesmo comparador)
   const byGroup = {};
   for (const r of rows.values()) {
     r.point_difference = Number(r.pf) - Number(r.pa);
     (byGroup[r.group_name] ||= []).push(r);
   }
-
   const out = [];
   for (const g of Object.keys(byGroup).sort()) {
     byGroup[g].sort(compareVolleySeed);
@@ -463,12 +451,12 @@ export default function Volei() {
       // 1) por sport_id (normal)
       if (sid) {
         const byId = await supabase.from("teams").select("id, name, logo_url, color").eq("sport_id", sid);
-        if (!byId.error && Array.isArray(byId.data)) {
+        if (!byId.error && Array.isArray(byId.data) && byId.data.length > 0) {
           const map = {};
           for (const t of byId.data) map[t.id] = { ...t, name: String(t.name ?? "—"), logo_url: normalizeLogo(t.logo_url) };
           setTeamsById(map);
-          teamsRef.current = map; // mantém o ref sincronizado
-          return;
+          teamsRef.current = map;
+          return; // só retorna se achou times
         }
       }
       // 2) fallback por NOME (join)
@@ -573,50 +561,48 @@ export default function Volei() {
   const loadMatches = useCallback(async (sid) => {
     try {
       if (!sid) { setMatches([]); return; }
-  
-      // Busca crua na tabela (sem joins, sem view)
       const { data, error } = await supabase
         .from("matches")
         .select(`
           id, sport_id,
           stage, round, group_name, starts_at, updated_at, venue, status, meta,
-          home_team_id, away_team_id, home_score, away_score
+          home_team_id, away_team_id, home_score, away_score, order_idx
         `)
         .eq("sport_id", sid);
-  
       if (error) throw error;
-  
-      // Monta objeto de time sem depender de join
       const mkTeam = (id) => (id ? ({ ...(teamsRef.current[id] || {}), id, name: String((teamsRef.current[id]?.name ?? "A definir")) }) : null);
-  
-      const rows = (data || []).map((r) => ({
-        id: r.id,
-        sport_id: r.sport_id,
-        order_idx: safeOrder(r),
-        stage: normStage(r.stage),
-        round: r.round,
-        group_name: r.group_name,
-        starts_at: r.starts_at,
-        updated_at: r.updated_at,
-        venue: r.venue,
-        status: normStatus(r.status),
-        meta: r.meta,                      // contém sets se você usar isso no placar
-        home_score: r.home_score,
-        away_score: r.away_score,
-        home: mkTeam(r.home_team_id),
-        away: mkTeam(r.away_team_id),
-      }));
-  
+      const rows = (data || []).map((r) => {
+        const displayOrder = Number.isFinite(Number(r.order_idx)) ? Number(r.order_idx) : null;
+        const sortKey = Number.isFinite(Number(r.order_idx)) ? Number(r.order_idx)
+          : Number.isFinite(Number(r.round)) ? Number(r.round)
+          : Number.MAX_SAFE_INTEGER;
+        return {
+          id: r.id,
+          sport_id: r.sport_id,
+          order_idx: displayOrder, // para exibir
+          _sortKey: sortKey,       // para ordenar
+          stage: normStage(r.stage),
+          round: r.round,
+          group_name: r.group_name,
+          starts_at: r.starts_at,
+          updated_at: r.updated_at,
+          venue: r.venue,
+          status: normStatus(r.status),
+          meta: r.meta,
+          home_score: r.home_score,
+          away_score: r.away_score,
+          home: mkTeam(r.home_team_id),
+          away: mkTeam(r.away_team_id),
+        };
+      });
       const phaseRank = { grupos: 1, oitavas: 2, quartas: 3, semi: 4, "3lugar": 5, final: 6 };
-      const ord = (x) => (Number.isFinite(Number(x?.order_idx)) ? Number(x.order_idx) : Number.MAX_SAFE_INTEGER);
-  
       rows.sort((a, b) =>
-        (phaseRank[a.stage] ?? 99) - (phaseRank[b.stage] ?? 99) || ord(a) - ord(b)
+        (phaseRank[a.stage] ?? 99) - (phaseRank[b.stage] ?? 99) ||
+        (a._sortKey - b._sortKey) ||
+        (ts(a.starts_at) - ts(b.starts_at)) ||
+        (a.id - b.id)
       );
-  
       setMatches(rows);
-  
-      // (opcional) log para sanity-check
       console.info("[Vôlei] matches carregados:", rows.length);
     } catch (e) {
       console.error("Exceção loadMatches (vôlei):", e);
@@ -628,7 +614,8 @@ export default function Volei() {
     async (sid, { skeleton = false } = {}) => {
       if (skeleton) setLoading(true);
       try {
-        await Promise.all([loadTeams(sid), loadStandings(sid), loadMatches(sid)]);
+        await loadTeams(sid);
+        await Promise.all([loadStandings(sid), loadMatches(sid)]);
       } finally {
         setLoading(false);
       }
@@ -677,6 +664,61 @@ export default function Volei() {
     }
   }, [loading, standings.length, matches]);
 
+  // Garante que TODOS os times apareçam na tabela (mesmo zerados)
+  useEffect(() => {
+    if (!standings) return;
+
+    // quem já está na tabela
+    const present = new Set(standings.map((r) => String(r.team_id)));
+    const allTeamIds = Object.keys(teamsRef.current || {});
+    const missing = allTeamIds.filter((id) => !present.has(String(id)));
+    if (missing.length === 0) return;
+
+    // tenta inferir grupo de cada time a partir dos jogos (home/away)
+    const groupByTeam = new Map();
+    for (const m of matches || []) {
+      const g = m?.group_name || "-";
+      if (m?.home?.id) groupByTeam.set(String(m.home.id), g);
+      if (m?.away?.id) groupByTeam.set(String(m.away.id), g);
+    }
+
+    // cria linhas zeradas para os ausentes
+    const zeroRows = missing.map((id) => {
+      const t = teamsRef.current[id] || {};
+      return {
+        group_name: groupByTeam.get(String(id)) || "-",
+        team_id: isNaN(Number(id)) ? id : Number(id),
+        team_name: t.name || "—",
+        matches_played: 0,
+        wins: 0,
+        losses: 0,
+        sv: 0,
+        sp: 0,
+        pf: 0,
+        pa: 0,
+        point_difference: 0,
+        points: 0,
+      };
+    });
+
+    // mescla + reordena + recalcula rank por grupo
+    const merged = [...standings, ...zeroRows];
+    const byGroup = {};
+    for (const r of merged) {
+      const g = r.group_name || "-";
+      const pd = Number(r.point_difference ?? ((r.pf ?? 0) - (r.pa ?? 0)));
+      (byGroup[g] ||= []).push({ ...r, point_difference: pd });
+    }
+
+    const out = [];
+    for (const g of Object.keys(byGroup).sort()) {
+      byGroup[g].sort(compareVolleySeed);
+      byGroup[g].forEach((r, i) => out.push({ ...r, rank: i + 1 }));
+    }
+
+    setStandings(out);
+  }, [standings, matches, teamsById]);
+
   const hasGroups = standings.length > 0;
   const knockout = useMemo(() => {
     const byStage = (stage) =>
@@ -705,7 +747,12 @@ export default function Volei() {
   }, [matches]);
 
   const scheduledAll = useMemo(() => {
-    let arr = (matches || []).filter((m) => m.status === "scheduled");
+    const groupsPending = (matches || []).some(
+      (m) => m.stage === "grupos" && m.status !== "finished"
+    );
+    let arr = (matches || []).filter(
+      (m) => m.status === "scheduled" && (groupsPending ? m.stage === "grupos" : true)
+    );
     if (groupFilter !== "todos") arr = arr.filter((m) => m.group_name === groupFilter);
     if (stageFilter !== "todos") arr = arr.filter((m) => m.stage === stageFilter);
     arr.sort((a, b) => (ts(a.starts_at) - ts(b.starts_at)) || ((a.order_idx ?? 1) - (b.order_idx ?? 1)));

@@ -337,7 +337,9 @@ export default function FIFA() {
   }, [matches]);
 
   const scheduled = useMemo(() => {
-    const arr = (matches || []).filter((m) => m.status === "scheduled");
+    const arr = (matches || []).filter(
+      (m) => m.status === "scheduled" && m.home?.id && m.away?.id
+    );
     arr.sort((a, b) => {
       const da = a.starts_at ? parseDateSafe(a.starts_at)?.getTime() ?? Number.POSITIVE_INFINITY : Number.POSITIVE_INFINITY;
       const db = b.starts_at ? parseDateSafe(b.starts_at)?.getTime() ?? Number.POSITIVE_INFINITY : Number.POSITIVE_INFINITY;

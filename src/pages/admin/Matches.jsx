@@ -97,6 +97,8 @@ export default function Matches() {
   const [lastError, setLastError] = useState(null);
   const [currentTimestamp, setCurrentTimestamp] = useState(Date.now());
   const [isOnline, setIsOnline] = useState(typeof navigator !== "undefined" ? navigator.onLine : true);
+  const [manualSetEdit, setManualSetEdit] = useState(false);
+  const [confirmingFinalizeId, setConfirmingFinalizeId] = useState(null);
 
   const channelRef = useRef(null);
   const mountedRef = useRef(true);
@@ -359,18 +361,64 @@ export default function Matches() {
 
   const changePoints = async (m, team, action) => {
     if (m.status === "scheduled") return;
-    const key = `${team}_score`;
-    let next = Math.max(0, Number(m[key] || 0));
+    const sportNameNorm = norm(m?.sport?.name || "");
+    const isVolei = sportNameNorm.includes("volei");
+    const meta = m.meta || {};
+    const key = isVolei ? `${team}_points_set` : `${team}_score`;
+    let next = Math.max(0, Number((isVolei ? meta[key] : m[key]) || 0));
     if (action === "inc") next += 1;
     if (action === "dec") next = Math.max(0, next - 1);
     if (action === "reset") next = 0;
-    await mutate(m.id, { [key]: next });
+    if (isVolei) {
+      await mutate(m.id, { meta: { ...meta, [key]: next } });
+    } else {
+      await mutate(m.id, { [key]: next });
+    }
   };
+
+  const getSetPoints = (m, side) => Math.max(0, Number(m?.meta?.[`${side}_points_set`] || 0));
 
   const getSets = (m, side) => {
     const meta = m.meta || {};
     const key = side === "home" ? "home_sets" : "away_sets";
     return Math.max(0, Number(meta[key] || 0));
+  };
+
+  const canFinalizeSet = (m) => {
+    const MIN = Number(m?.meta?.rules?.points_to_win_set ?? 15);
+    const ADV = Number(m?.meta?.rules?.win_by ?? 2);
+    const hs = getSetPoints(m, "home");
+    const as = getSetPoints(m, "away");
+    const top = Math.max(hs, as);
+    const lead = Math.abs(hs - as);
+    return top >= MIN && lead >= ADV;
+  };
+
+  const finalizeSet = async (m, { force = false } = {}) => {
+    if (m.status === "scheduled") return;
+    const meta = m.meta || {};
+    const hs = getSetPoints(m, "home");
+    const as = getSetPoints(m, "away");
+    const setsArr = Array.isArray(meta.sets) ? meta.sets : [];
+    if (!force && !canFinalizeSet(m)) {
+      setLastError("Para finalizar o set: mínimo 15 pontos e 2 de vantagem (ajustável em meta.rules). Clique novamente para forçar.");
+      return;
+    }
+    const homeWon = hs > as ? true : (as > hs ? false : null); // null = empate
+    const nextMeta = {
+      ...meta,
+      sets: [...setsArr, { h: hs, a: as, at: new Date().toISOString() }],
+      home_sets: getSets(m, "home") + (homeWon === true ? 1 : 0),
+      away_sets: getSets(m, "away") + (homeWon === false ? 1 : 0),
+      home_points_set: 0,
+      away_points_set: 0,
+    };
+    await mutate(m.id, {
+      meta: nextMeta,
+      home_score: Math.max(0, Number(m.home_score || 0)) + hs,
+      away_score: Math.max(0, Number(m.away_score || 0)) + as,
+      updated_at: new Date().toISOString(),
+    });
   };
 
   const changeSets = async (m, team, action) => {
@@ -389,6 +437,20 @@ export default function Matches() {
     const patch = { status: newStatus, updated_at: now };
     if (newStatus === "ongoing" && m.status === "scheduled" && !m.starts_at) patch.starts_at = now;
     return await mutate(m.id, patch);
+  };
+
+  const finishMatch = async (m) => {
+    const hs = getSetPoints(m, "home");
+    const as = getSetPoints(m, "away");
+    if (hs > 0 || as > 0) {
+      const meta = m.meta || {};
+      await mutate(m.id, {
+        meta: { ...meta, home_points_set: 0, away_points_set: 0 },
+        home_score: Math.max(0, Number(m.home_score || 0)) + hs,
+        away_score: Math.max(0, Number(m.away_score || 0)) + as,
+      });
+    }
+    return await applyStatusChange(m, "finished");
   };
 
   // ---------- guarda de fila no clique ----------
@@ -431,7 +493,6 @@ export default function Matches() {
   const startMatch = async (m) => await tryStartMatch(m);
   const pauseMatch = async (m) => await applyStatusChange(m, "paused");
   const resumeMatch = async (m) => await applyStatusChange(m, "ongoing");
-  const finishMatch = async (m) => await applyStatusChange(m, "finished");
 
   /* ================================ Render ================================ */
 
@@ -529,9 +590,11 @@ export default function Matches() {
         <ul className="space-y-4">
           {matches.map((m) => {
             const sportNameNorm = norm(m?.sport?.name || "");
-            const isVolei = sportNameNorm === "volei" || sportNameNorm === "volei " || sportNameNorm === "voleibol";
+            const isVolei = sportNameNorm.includes("volei");
             const homeSets = isVolei ? getSets(m, "home") : 0;
             const awaySets = isVolei ? getSets(m, "away") : 0;
+            const homeSetPts = isVolei ? getSetPoints(m, "home") : null;
+            const awaySetPts = isVolei ? getSetPoints(m, "away") : null;
 
             const isKnockout = !m.group_name;
             const hasBothTeams = Boolean(m.home?.id && m.away?.id);
@@ -554,7 +617,7 @@ export default function Matches() {
                   <div className="text-xs text-gray-500 flex flex-wrap items-center gap-1 sm:gap-2">
                     <span className="font-medium">{m.sport?.name}</span>
                     {m.group_name && <span>· Grupo {m.group_name}</span>}
-                    {m.stage && <span>· {m.stage}</span>}
+                    {m.stage && <span>· {m.stage === "semi" ? "Semifinal" : m.stage === "3lugar" ? "3º lugar" : m.stage}</span>}
                     {m.round && <span>· J{m.round}</span>}
                     {isLive && (
                       <span className="inline-flex items-center gap-1 text-[11px] font-medium text-gray-600">
@@ -595,9 +658,10 @@ export default function Matches() {
                     onDec={() => changePoints(m, "home", "dec")}
                     onReset={() => changePoints(m, "home", "reset")}
                     sets={isVolei ? homeSets : null}
-                    onSetInc={isVolei ? () => changeSets(m, "home", "inc") : undefined}
-                    onSetDec={isVolei ? () => changeSets(m, "home", "dec") : undefined}
-                    onSetReset={isVolei ? () => changeSets(m, "home", "reset") : undefined}
+                    setPoints={isVolei ? homeSetPts : null}
+                    onSetInc={isVolei && manualSetEdit ? () => changeSets(m, "home", "inc") : undefined}
+                    onSetDec={isVolei && manualSetEdit ? () => changeSets(m, "home", "dec") : undefined}
+                    onSetReset={isVolei && manualSetEdit ? () => changeSets(m, "home", "reset") : undefined}
                     disabled={busy[m.id] || m.status === "scheduled"}
                   />
                   <TeamDisplay
@@ -608,12 +672,44 @@ export default function Matches() {
                     onDec={() => changePoints(m, "away", "dec")}
                     onReset={() => changePoints(m, "away", "reset")}
                     sets={isVolei ? awaySets : null}
-                    onSetInc={isVolei ? () => changeSets(m, "away", "inc") : undefined}
-                    onSetDec={isVolei ? () => changeSets(m, "away", "dec") : undefined}
-                    onSetReset={isVolei ? () => changeSets(m, "away", "reset") : undefined}
+                    setPoints={isVolei ? awaySetPts : null}
+                    onSetInc={isVolei && manualSetEdit ? () => changeSets(m, "away", "inc") : undefined}
+                    onSetDec={isVolei && manualSetEdit ? () => changeSets(m, "away", "dec") : undefined}
+                    onSetReset={isVolei && manualSetEdit ? () => changeSets(m, "away", "reset") : undefined}
                     disabled={busy[m.id] || m.status === "scheduled"}
                   />
                 </div>
+
+                {/* Toggle edição manual de sets */}
+                {isVolei && (
+                  <button
+                    onClick={() => setManualSetEdit((v) => !v)}
+                    className="text-[10px] px-2 py-0.5 rounded border border-gray-300 hover:bg-gray-50 self-start"
+                  >
+                    {manualSetEdit ? "Fechar edição de sets" : "Editar sets manualmente"}
+                  </button>
+                )}
+
+                {/* Botão Finalizar set com confirmação dupla */}
+                {isVolei && (homeSetPts > 0 || awaySetPts > 0) && (
+                  <button
+                    onClick={async () => {
+                      if (confirmingFinalizeId === m.id) {
+                        const ok = canFinalizeSet(m);
+                        setConfirmingFinalizeId(null);
+                        await finalizeSet(m, { force: !ok });
+                      } else {
+                        setConfirmingFinalizeId(m.id);
+                        setTimeout(() => setConfirmingFinalizeId((v) => (v === m.id ? null : v)), 3000);
+                      }
+                    }}
+                    disabled={busy[m.id] || m.status === "scheduled"}
+                    className={`px-3 py-1 text-xs rounded ${confirmingFinalizeId === m.id ? "bg-red-600" : "bg-purple-600"} text-white hover:opacity-90 disabled:opacity-50`}
+                    title="Soma os pontos do set aos totais (PF/PA) e incrementa o set do vencedor."
+                  >
+                    {confirmingFinalizeId === m.id ? "Confirmar finalizar set" : "Finalizar set"}
+                  </button>
+                )}
 
                 {/* Ações de status */}
                 <div className="flex flex-wrap gap-2">
@@ -705,6 +801,7 @@ function TeamDisplay({
   onDec,
   onReset,
   sets,
+  setPoints,
   onSetInc,
   onSetDec,
   onSetReset,
@@ -742,11 +839,13 @@ function TeamDisplay({
         </div>
       )}
 
-      {/* Pontos */}
+      {/* Pontos do set ou totais */}
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <span className="text-xs text-gray-600">Pontos:</span>
-          <span className="font-bold text-lg tabular-nums">{Number(score || 0)}</span>
+          <span className="text-xs text-gray-600">
+            {typeof setPoints === "number" ? "Pontos do set:" : "Pontos:"}
+          </span>
+          <span className="font-bold text-lg tabular-nums">{typeof setPoints === "number" ? setPoints : Number(score || 0)}</span>
         </div>
         <div className="flex items-center gap-1">
           <button onClick={onDec} disabled={disabled} className="flex-1 px-2 py-1 text-xs border rounded hover:bg-gray-100 disabled:opacity-50">-</button>
@@ -755,7 +854,7 @@ function TeamDisplay({
             onClick={onReset}
             disabled={disabled}
             className="px-2 py-1 text-xs bg-red-500 text-white rounded hover:bg-red-600 disabled:opacity-50"
-            title="Zerar pontos"
+            title={typeof setPoints === "number" ? "Zerar pontos do set" : "Zerar pontos"}
           >
             0
           </button>

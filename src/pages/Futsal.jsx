@@ -158,21 +158,21 @@ function TeamChip({ team, align = "left", badge = 28 }) {
 function BracketMatchCard({ match, placeholder }) {
   const home = match?.home || (placeholder?.home ? { name: placeholder.home } : null);
   const away = match?.away || (placeholder?.away ? { name: placeholder.away } : null);
+  const homeName = home?.name || placeholder?.home || "A definir";
+  const awayName = away?.name || placeholder?.away || "A definir";
   const showScore = match?.status && match.status !== "scheduled";
   const homeScore = Number(match?.home_score ?? 0);
   const awayScore = Number(match?.away_score ?? 0);
-
-  const body = (
-    <div className="rounded-2xl border border-gray-200 bg-white p-3 shadow-sm transition hover:bg-gray-50">
+  return (
+    <Link to={`/match/${match.id}`} className="block rounded-2xl border border-gray-200 bg-white p-3 shadow-sm transition hover:bg-gray-50">
       <TitleLine order_idx={match?.order_idx} stage={match?.stage} />
-      {/* alinhado: time esq | x centro | time dir */}
       <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
         <div className="min-w-0 justify-self-start">
-          <TeamChip team={home} />
+          <TeamChip team={home?.id ? home : { name: homeName }} />
         </div>
         <div className="justify-self-center text-xs text-gray-400">x</div>
         <div className="min-w-0 justify-self-end">
-          <TeamChip team={away} align="right" />
+          <TeamChip team={away?.id ? away : { name: awayName }} align="right" />
         </div>
       </div>
       <div className="mt-1 flex items-center justify-between text-[11px] text-gray-500">
@@ -183,22 +183,21 @@ function BracketMatchCard({ match, placeholder }) {
           </span>
         ) : null}
       </div>
-    </div>
+    </Link>
   );
-
-  return match?.id ? <Link to={`/match/${match.id}`} className="block">{body}</Link> : body;
 }
 
 function ListMatchCard({ match }) {
   const showScore = match?.status && match.status !== "scheduled";
   const homeScore = Number(match?.home_score ?? 0);
   const awayScore = Number(match?.away_score ?? 0);
-
+  const homeName = match.home?.name || "A definir";
+  const awayName = match.away?.name || "A definir";
   return (
     <Link to={`/match/${match.id}`} className="block rounded-xl border border-gray-200 bg-white p-3 shadow-sm transition hover:bg-gray-50">
       <TitleLine order_idx={match.order_idx} stage={match.stage} group_name={match.group_name} />
       <div className="mt-1 grid grid-cols-3 items-center gap-2">
-        <TeamChip team={match.home} />
+        <TeamChip team={match.home?.id ? match.home : { name: homeName }} />
         <div className="text-center">
           {showScore ? (
             <span className="text-base font-bold tabular-nums">
@@ -208,7 +207,7 @@ function ListMatchCard({ match }) {
             <span className="text-xs text-gray-500">—</span>
           )}
         </div>
-        <TeamChip team={match.away} align="right" />
+        <TeamChip team={match.away?.id ? match.away : { name: awayName }} align="right" />
       </div>
       <div className="mt-1 flex items-center justify-between text-[11px] text-gray-500">
         <span className="truncate">{match?.starts_at ? fmtDate(match.starts_at) : match?.venue || ""}</span>
