@@ -199,6 +199,28 @@ function BracketMatchCard({ match, placeholder }) {
   return match?.id ? <Link to={`/match/${match.id}`} className="block">{body}</Link> : body;
 }
 
+// Ordena: Pontos ↓, Vitórias ↓, Saldo de Gols ↓, Gols Pró ↓, (fallback por id)
+function compareByPoints(a, b) {
+  const ap = Number(a.points ?? 0), bp = Number(b.points ?? 0);
+  if (bp !== ap) return bp - ap;
+
+  const aw = Number(a.wins ?? 0), bw = Number(b.wins ?? 0);
+  if (bw !== aw) return bw - aw;
+
+  const agd = Number(
+    a.goal_difference ?? (Number(a.goals_for ?? 0) - Number(a.goals_against ?? 0))
+  );
+  const bgd = Number(
+    b.goal_difference ?? (Number(b.goals_for ?? 0) - Number(b.goals_against ?? 0))
+  );
+  if (bgd !== agd) return bgd - agd;
+
+  const agf = Number(a.goals_for ?? 0), bgf = Number(b.goals_for ?? 0);
+  if (bgf !== agf) return bgf - agf;
+
+  return String(a.team_id).localeCompare(String(b.team_id));
+}
+
 /* ── Classificação ─────────────────────────────────────────────────────────── */
 function StandingsTable({ standings, teamsById }) {
   const groups = useMemo(() => {
@@ -209,7 +231,9 @@ function StandingsTable({ standings, teamsById }) {
       map[g].push(r);
     }
     for (const g of Object.keys(map)) {
-      map[g].sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99));
+      map[g].sort(compareByPoints);
+      // opcional: recalcula a posição visual para mostrar na primeira coluna
+      map[g] = map[g].map((row, i) => ({ ...row, rank: i + 1 }));
     }
     return map;
   }, [standings]);
@@ -355,6 +379,8 @@ class ErrorBoundary extends React.Component {
 export default function Pebolim() {
   const [sportId, setSportId] = useState(null);
   const [teamsById, setTeamsById] = useState({});
+  const teamsRef = useRef({});
+  useEffect(() => { teamsRef.current = teamsById; }, [teamsById]);
   const [standings, setStandings] = useState([]);
   const [matches, setMatches] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -390,11 +416,12 @@ export default function Pebolim() {
       for (const t of data || []) {
         map[t.id] = { 
           ...t, 
-          name: String(t.name ?? "—"),          // <- força string aqui
+          name: String(t.name ?? "—"),
           logo_url: normalizeLogo(t.logo_url) 
         };
       }
       setTeamsById(map);
+      teamsRef.current = map; // mantém o ref sincronizado
     } catch (e) {
       console.error("Exceção loadTeams:", e);
     }
@@ -402,6 +429,7 @@ export default function Pebolim() {
 
   const loadStandings = useCallback(async (sid) => {
     try {
+      // 1) VIEW por sport_id
       const v = await supabase
         .from("standings_view")
         .select("group_name, rank, team_id, team_name, matches_played, wins, draws, losses, goals_for, goals_against, goal_difference, points")
@@ -409,11 +437,12 @@ export default function Pebolim() {
         .order("group_name", { ascending: true, nullsFirst: true })
         .order("rank", { ascending: true });
 
-      if (!v.error && v.data) {
+      if (!v.error && Array.isArray(v.data) && v.data.length > 0) {
         setStandings(v.data);
         return;
       }
 
+      // 2) Fallback: tabela 'standings'
       const j = await supabase
         .from("standings")
         .select(`
@@ -426,94 +455,63 @@ export default function Pebolim() {
         .order("group_name", { ascending: true, nullsFirst: true })
         .order("rank", { ascending: true });
 
-      const rows = (j.data || []).map((r) => ({ ...r, team_name: r.team?.name })) || [];
+      const rows = (j.data || []).map((r) => ({ ...r, team_name: r.team?.name }));
       setStandings(rows);
     } catch (e) {
       console.error("Exceção loadStandings:", e);
+      setStandings([]);
     }
   }, []);
 
   const loadMatches = useCallback(async (sid) => {
     try {
-      // Tenta a view detalhada
-      const { data: vrows, error: verr } = await supabase
-        .from("match_detail_view")
+      if (!sid) { setMatches([]); return; }
+  
+      const { data, error } = await supabase
+        .from("matches")
         .select(`
-          id, sport_id, order_idx,
+          id, sport_id,
           stage, round, group_name, starts_at, updated_at, venue, status,
-          home_team_id, home_team_name, home_team_color, home_team_logo,
-          away_team_id, away_team_name, away_team_color, away_team_logo,
-          home_score, away_score
+          home_team_id, away_team_id, home_score, away_score
         `)
         .eq("sport_id", sid);
-
-      let rows = [];
-      if (!verr && vrows?.length) {
-        rows = vrows.map((r) => ({
-          id: r.id,
-          sport_id: r.sport_id,
-          order_idx: r.order_idx,
-          stage: r.stage,
-          round: r.round,
-          group_name: r.group_name,
-          starts_at: r.starts_at,
-          updated_at: r.updated_at,
-          venue: r.venue,
-          status: r.status,
-          home_score: r.home_score,
-          away_score: r.away_score,
-          home: r.home_team_id
-            ? { id: r.home_team_id, name: String(r.home_team_name ?? "A definir"), color: r.home_team_color, logo_url: normalizeLogo(r.home_team_logo) }
-            : null,
-          away: r.away_team_id
-            ? { id: r.away_team_id, name: String(r.away_team_name ?? "A definir"), color: r.away_team_color, logo_url: normalizeLogo(r.away_team_logo) }
-            : null,
-        }));
-      } else {
-        // Fallback: tabela matches
-        const { data: jrows, error: jerr } = await supabase
-          .from("matches")
-          .select(`
-            id, stage, round, group_name, starts_at, updated_at, venue, status,
-            home_score, away_score,
-            home:home_team_id ( id, name, logo_url, color ),
-            away:away_team_id ( id, name, logo_url, color )
-          `)
-          .eq("sport_id", sid);
-
-        if (jerr) {
-          console.error("Erro matches fallback:", jerr);
-          setMatches([]);
-          return;
-        }
-
-        rows = (jrows || []).map((m) => ({
-          ...m,
-          order_idx: m.order_idx ?? m.round ?? m.id, // cria ordem estável
-          home: m.home ? { ...m.home, name: String(m.home.name ?? "A definir"), logo_url: normalizeLogo(m.home.logo_url) } : null,
-          away: m.away ? { ...m.away, name: String(m.away.name ?? "A definir"), logo_url: normalizeLogo(m.away.logo_url) } : null,
-        }));
-            }
-
-      // Ordenação robusta por fase + ordem estável
+  
+      if (error) throw error;
+  
+      const mkTeam = (id) => (id ? ({ ...(teamsRef.current[id] || {}), id, name: String((teamsRef.current[id]?.name ?? "A definir")) }) : null);
+  
+      const rows = (data || []).map((r) => ({
+        id: r.id,
+        sport_id: r.sport_id,
+        order_idx: safeOrder(r),
+        stage: normStage(r.stage),
+        round: r.round,
+        group_name: r.group_name,
+        starts_at: r.starts_at,
+        updated_at: r.updated_at,
+        venue: r.venue,
+        status: normStatus(r.status),
+        home_score: r.home_score,
+        away_score: r.away_score,
+        home: mkTeam(r.home_team_id),
+        away: mkTeam(r.away_team_id),
+      }));
+  
       const phaseRank = { grupos: 1, oitavas: 2, quartas: 3, semi: 4, "3lugar": 5, final: 6 };
-      const ord = (x) => {
-        const v = Number(x?.order_idx);
-        return Number.isFinite(v) ? v : Number.MAX_SAFE_INTEGER;
-      };
-      rows.sort((a, b) => {
-        const pa = phaseRank[a.stage] ?? 99;
-        const pb = phaseRank[b.stage] ?? 99;
-        if (pa !== pb) return pa - pb;
-        return ord(a) - ord(b);
-      });
-
+      const ord = (x) => (Number.isFinite(Number(x?.order_idx)) ? Number(x.order_idx) : Number.MAX_SAFE_INTEGER);
+  
+      rows.sort((a, b) =>
+        (phaseRank[a.stage] ?? 99) - (phaseRank[b.stage] ?? 99) || ord(a) - ord(b)
+      );
+  
       setMatches(rows);
+      console.info("[Pebolim] rows:", rows.length, rows.slice(0, 2));
     } catch (e) {
-      console.error("Exceção loadMatches:", e);
+      console.error("Exceção loadMatches (pebolim):", e);
       setMatches([]);
     }
-  }, []);
+  }, []); // <- sem deps
+  
 
   const loadAll = useCallback(
     async (sid, { skeleton = false } = {}) => {
@@ -536,29 +534,19 @@ export default function Pebolim() {
     if (!sportId) return;
     loadAll(sportId, { skeleton: true });
 
-    // Realtime com debounce
     if (channelRef.current) {
       try { supabase.removeChannel(channelRef.current); } catch {}
       channelRef.current = null;
     }
+    const onChange = () => {
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+      refreshTimerRef.current = setTimeout(() => loadAll(sportId, { skeleton: false }), 1000);
+    };
     const ch = supabase
       .channel(`pebolim-hub-${sportId}`)
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "matches", filter: `sport_id=eq.${sportId}` },
-        () => {
-          if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
-          refreshTimerRef.current = setTimeout(() => loadAll(sportId, { skeleton: false }), 200);
-        }
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "standings" },
-        () => {
-          if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
-          refreshTimerRef.current = setTimeout(() => loadAll(sportId, { skeleton: false }), 200);
-        }
-      )
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "matches", filter: `sport_id=eq.${sportId}` }, onChange)
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "matches", filter: `sport_id=eq.${sportId}` }, onChange)
+      .on("postgres_changes", { event: "DELETE", schema: "public", table: "matches", filter: `sport_id=eq.${sportId}` }, onChange)
       .subscribe();
     channelRef.current = ch;
 
@@ -572,7 +560,7 @@ export default function Pebolim() {
         channelRef.current = null;
       }
     };
-  }, [sportId, loadAll]);
+  }, [sportId]); // <- só depende de sportId
 
   /* Derivações */
   const hasGroups = useMemo(() => (standings?.length ? true : (matches || []).some((m) => !!m.group_name)), [standings, matches]);
@@ -594,14 +582,10 @@ export default function Pebolim() {
   }, [matches]);
 
   const scheduledAll = useMemo(() => {
-    let arr = (matches || []).filter((m) => {
-      if (m.status !== "scheduled") return false;
-      if (m.group_name) return true;
-      return m.home?.id && m.away?.id;
-    });
+    let arr = (matches || []).filter((m) => m.status === "scheduled");
     if (groupFilter !== "todos") arr = arr.filter((m) => m.group_name === groupFilter);
     if (stageFilter !== "todos") arr = arr.filter((m) => m.stage === stageFilter);
-    arr.sort((a, b) => ts(a.starts_at) - ts(b.starts_at));
+    arr.sort((a, b) => (ts(a.starts_at) - ts(b.starts_at)) || ((a.order_idx ?? 1) - (b.order_idx ?? 1)));
     return arr;
   }, [matches, groupFilter, stageFilter]);
 
@@ -623,7 +607,7 @@ export default function Pebolim() {
           </div>
           <p className="text-sm text-gray-600">
             Hub informativo: <strong>classificação</strong> (se houver grupos) → <strong>chaveamento</strong> →{" "}
-            <strong>jogos agendados</strong> → <strong>regulamento</strong>. Não há indicadores de “ao vivo/pausado” nesta página.
+            <strong>jogos agendados</strong> → <strong>regulamento</strong>.
           </p>
         </header>
 
@@ -640,12 +624,10 @@ export default function Pebolim() {
         ) : (
           <>
             {/* 1) CLASSIFICAÇÃO */}
-            {hasGroups && (
-              <section className="space-y-4">
-                <h3 className="text-lg font-bold">Tabela de classificação</h3>
-                <StandingsTable standings={standings} teamsById={teamsById} />
-              </section>
-            )}
+            <section className="space-y-4">
+              <h3 className="text-lg font-bold">Tabela de classificação</h3>
+              <StandingsTable standings={standings} teamsById={teamsById} />
+            </section>
 
             {/* 2) CHAVEAMENTO */}
             <section className="space-y-4">

@@ -401,7 +401,7 @@ export default function TeamPage() {
       <div className="grid md:grid-cols-2 gap-6">
         {/* Elenco */}
         <div className="bg-white border rounded-lg p-4 shadow-sm">
-          <h2 className="text-lg font-semibold mb-4">Elenco</h2>
+          <h2 className="text-lg font-semibold mb-4">Convocação</h2>
           {players.length === 0 ? (
             <p className="text-gray-500 text-sm">Nenhum jogador cadastrado.</p>
           ) : (

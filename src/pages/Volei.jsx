@@ -1,16 +1,8 @@
 // src/pages/Volei.jsx
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "../supabaseClient";
 import TeamBadge from "../components/TeamBadge";
-
-/* ──────────────────────────────────────────────────────────────────────────────
-   Hub Vôlei — Estrutura visual (igual Pebolim)
-   1) Classificação (se houver grupos) — critérios do VÔLEI
-   2) Chaveamento (sempre visível, com placeholders)
-   3) Jogos agendados (lista integral, com filtros opcionais)
-   4) Regulamento
-   ────────────────────────────────────────────────────────────────────────────── */
 
 const SPORT_LABEL = "Vôlei";
 const SPORT_ICON = "🏐";
@@ -26,8 +18,8 @@ const STAGE_FRIENDLY = {
   "3lugar": "3º lugar",
 };
 const friendlyStage = (s) => (s ? STAGE_FRIENDLY[s] || s : "");
+const SPORT_NAMES = ["Vôlei", "Volei", "Voleibol"];
 
-/* ── Datas seguras ─────────────────────────────────────────────────────────── */
 function parseDateSafe(dt) {
   if (!dt) return null;
   if (dt instanceof Date) return isNaN(dt.getTime()) ? null : dt;
@@ -62,7 +54,6 @@ const ts = (x) => {
   return d ? d.getTime() : Number.POSITIVE_INFINITY;
 };
 
-/* ── Logos ─────────────────────────────────────────────────────────────────── */
 const isHttpUrl = (str) => typeof str === "string" && /^https?:\/\//i.test(str);
 const isStoragePath = (str) => typeof str === "string" && !isHttpUrl(str) && str.trim() !== "";
 function publicLogoUrl(raw) {
@@ -79,16 +70,31 @@ const normalizeLogo = (raw) => {
   return url ? `${url}${url.includes("?") ? "&" : "?"}v=1` : null;
 };
 
-/* ── UI: Título compacto ───────────────────────────────────────────────────── */
-function TitleLine({ order_idx, stage, group_name }) {
-  const chips = [];
-  if (order_idx !== undefined && order_idx !== null && String(order_idx).length) chips.push(`J${order_idx}`);
-  if (group_name) chips.push(`Grupo ${group_name}`);
-  else if (stage) chips.push(friendlyStage(stage));
-  return <div className="mb-1 text-sm font-semibold text-gray-900">{chips.join(" • ") || "—"}</div>;
+class ErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { hasError: false, error: null }; }
+  static getDerivedStateFromError(error) { return { hasError: true, error }; }
+  componentDidCatch(error, info) { console.error("Vôlei ErrorBoundary:", error, info); }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
+          <div className="font-semibold mb-1">Algo quebrou ao renderizar esta página.</div>
+          <div className="font-mono text-xs whitespace-pre-wrap">{String(this.state.error?.message || this.state.error)}</div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
 }
 
-/* ── UI: TeamChip (sanitiza nome para string) ──────────────────────────────── */
+function TitleLine({ order_idx, stage, group_name }) {
+  const parts = [];
+  if (order_idx !== undefined && order_idx !== null && String(order_idx).length) parts.push(`Jogo ${order_idx}`);
+  if (group_name) parts.push(`Grupo ${group_name}`);
+  else if (stage) parts.push(friendlyStage(stage));
+  return <div className="mb-1 text-sm font-semibold text-gray-900">{parts.join(" • ") || "—"}</div>;
+}
+
 function TeamChip({ team, align = "left", badge = 28 }) {
   const displayName = (() => {
     const n = team?.name;
@@ -96,72 +102,18 @@ function TeamChip({ team, align = "left", badge = 28 }) {
     if (n && typeof n === "object" && "name" in n) return String(n.name);
     try { return String(n ?? "A definir"); } catch { return "A definir"; }
   })();
-
   const has = Boolean(team?.id);
   const content = (
     <>
       {align === "right" ? null : <TeamBadge team={{ ...(team || {}), name: displayName }} size={badge} />}
-      <span
-        className={`truncate ${has ? "text-gray-900" : "text-gray-400"} ${align === "right" ? "text-right" : ""}`}
-        title={displayName}
-      >
-        {displayName}
-      </span>
+      <span className={`truncate ${has ? "text-gray-900" : "text-gray-400"} ${align === "right" ? "text-right" : ""}`} title={displayName}>{displayName}</span>
       {align === "right" ? <TeamBadge team={{ ...(team || {}), name: displayName }} size={badge} /> : null}
     </>
   );
-
-  if (!has) {
-    return <div className={`min-w-0 flex items-center gap-2 ${align === "right" ? "justify-end" : ""}`}>{content}</div>;
-  }
+  if (!has) return <div className={`min-w-0 flex items-center gap-2 ${align === "right" ? "justify-end" : ""}`}>{content}</div>;
   return (
-    <Link
-      to={`/team/${team.id}`}
-      className={`min-w-0 flex items-center gap-2 hover:underline ${align === "right" ? "justify-end" : ""}`}
-      onClick={(e) => e.stopPropagation()}
-      title={displayName}
-    >
+    <Link to={`/team/${team.id}`} className={`min-w-0 flex items-center gap-2 hover:underline ${align === "right" ? "justify-end" : ""}`} onClick={(e) => e.stopPropagation()} title={displayName}>
       {content}
-    </Link>
-  );
-}
-
-/* ── UI: Cartões de partida ───────────────────────────────────────────────── */
-function ListMatchCard({ match }) {
-  const showScore = match?.status && match.status !== "scheduled";
-  const homeScore = Number(match?.home_score ?? 0);
-  const awayScore = Number(match?.away_score ?? 0);
-  const homeSets = Number(match?.meta?.home_sets ?? 0);
-  const awaySets = Number(match?.meta?.away_sets ?? 0);
-  const hasSets = showScore && (homeSets > 0 || awaySets > 0);
-
-  return (
-    <Link to={`/match/${match.id}`} className="block rounded-xl border border-gray-200 bg-white p-3 shadow-sm transition hover:bg-gray-50">
-      <TitleLine order_idx={match.order_idx} stage={match.stage} group_name={match.group_name} />
-      <div className="mt-1 grid grid-cols-3 items-center gap-2">
-        <TeamChip team={match.home} />
-        <div className="text-center">
-          {showScore ? (
-            <>
-              {hasSets ? (
-                <div className="text-[11px] font-medium tabular-nums text-gray-600 mb-0.5">
-                  Sets: {homeSets} <span className="text-gray-400">x</span> {awaySets}
-                </div>
-              ) : null}
-              <div className="text-base font-bold tabular-nums">
-                {homeScore} <span className="text-gray-400">x</span> {awayScore}
-              </div>
-            </>
-          ) : (
-            <span className="text-xs text-gray-500">—</span>
-          )}
-        </div>
-        <TeamChip team={match.away} align="right" />
-      </div>
-      <div className="mt-1 flex items-center justify-between text-[11px] text-gray-500">
-        <span className="truncate">{match?.starts_at ? fmtDate(match.starts_at) : match?.venue || ""}</span>
-        {match?.updated_at && match?.status === "finished" ? <span>Encerrado em {fmtDate(match.updated_at)}</span> : null}
-      </div>
     </Link>
   );
 }
@@ -179,117 +131,117 @@ function BracketMatchCard({ match, placeholder }) {
   const body = (
     <div className="rounded-2xl border border-gray-200 bg-white p-3 shadow-sm transition hover:bg-gray-50">
       <TitleLine order_idx={match?.order_idx} stage={match?.stage} />
-      {/* alinhamento perfeito: time esquerda | x centro | time direita */}
       <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
-        <div className="min-w-0 justify-self-start">
-          <TeamChip team={home} />
-        </div>
+        <div className="min-w-0 justify-self-start"><TeamChip team={home} /></div>
         <div className="justify-self-center text-xs text-gray-400">x</div>
-        <div className="min-w-0 justify-self-end">
-          <TeamChip team={away} align="right" />
-        </div>
+        <div className="min-w-0 justify-self-end"><TeamChip team={away} align="right" /></div>
       </div>
       <div className="mt-1 flex items-center justify-between text-[11px] text-gray-500">
         <span className="truncate">{match?.starts_at ? fmtDate(match.starts_at) : match?.venue || ""}</span>
         {showScore ? (
           <span className="tabular-nums font-semibold text-gray-700">
-            {hasSets ? (
-              <>
-                <span className="mr-2">
-                  Sets {homeSets} <span className="text-gray-400">x</span> {awaySets}
-                </span>
-              </>
-            ) : null}
+            {hasSets ? <span className="mr-2">Sets {homeSets} <span className="text-gray-400">x</span> {awaySets}</span> : null}
             {homeScore} <span className="text-gray-400">x</span> {awayScore}
           </span>
         ) : null}
       </div>
     </div>
   );
-
   return match?.id ? <Link to={`/match/${match.id}`} className="block">{body}</Link> : body;
 }
 
-/* ── Classificação (Vôlei) ──────────────────────────────────────────────────
-   Vitória do jogo por sets; se empatar em sets, desempata por pontos do placar.
-   Ranking: Pts(3 por vitória) ↓, depois SV ↓, SP ↑, e saldo de pontos (PF−PA) ↓.
-*/
-function computeVolleyAgg(matches) {
-  const agg = {}; // teamId -> { mp, wins, losses, sv, sp, pf, pa }
-  const add = (id) => {
-    if (!agg[id]) agg[id] = { mp: 0, wins: 0, losses: 0, sv: 0, sp: 0, pf: 0, pa: 0 };
-  };
+function ListMatchCard({ match }) {
+  const showScore = match?.status && match.status !== "scheduled";
+  const homeScore = Number(match?.home_score ?? 0);
+  const awayScore = Number(match?.away_score ?? 0);
+  const homeSets = Number(match?.meta?.home_sets ?? 0);
+  const awaySets = Number(match?.meta?.away_sets ?? 0);
+  const hasSets = showScore && (homeSets > 0 || awaySets > 0);
+  return (
+    <Link to={`/match/${match.id}`} className="block rounded-xl border border-gray-200 bg-white p-3 shadow-sm transition hover:bg-gray-50">
+      <TitleLine order_idx={match.order_idx} stage={match.stage} group_name={match.group_name} />
+      <div className="mt-1 grid grid-cols-3 items-center gap-2">
+        <TeamChip team={match.home} />
+        <div className="text-center">
+          {showScore ? (
+            <>
+              {hasSets ? <div className="text-[11px] font-medium tabular-nums text-gray-600 mb-0.5">Sets: {homeSets} <span className="text-gray-400">x</span> {awaySets}</div> : null}
+              <div className="text-base font-bold tabular-nums">
+                {homeScore} <span className="text-gray-400">x</span> {awayScore}
+              </div>
+            </>
+          ) : <span className="text-xs text-gray-500">—</span>}
+        </div>
+        <TeamChip team={match.away} align="right" />
+      </div>
+      <div className="mt-1 flex items-center justify-between text-[11px] text-gray-500">
+        <span className="truncate">{match?.starts_at ? fmtDate(match.starts_at) : match?.venue || ""}</span>
+        {match?.updated_at && match?.status === "finished" ? <span>Encerrado em {fmtDate(match.updated_at)}</span> : null}
+      </div>
+    </Link>
+  );
+}
 
-  for (const m of matches || []) {
-    if (m.stage !== "grupos" || m.status !== "finished") continue;
+/* Seed comparator (mesma ordem da view volei) */
+function compareVolleySeed(a, b) {
+  return (
+    (b.points ?? 0) - (a.points ?? 0) ||
+    (b.sv ?? 0) - (a.sv ?? 0) ||
+    (a.sp ?? 0) - (b.sp ?? 0) ||
+    ((b.point_difference ?? ((b.pf ?? 0) - (b.pa ?? 0))) - (a.point_difference ?? ((a.pf ?? 0) - (a.pa ?? 0)))) ||
+    (b.pf ?? 0) - (a.pf ?? 0) ||
+    String(a.team_id).localeCompare(String(b.team_id))
+  );
+}
 
-    const hid = m.home_team_id || m.home?.id;
-    const aid = m.away_team_id || m.away?.id;
-    if (!hid || !aid) continue;
+function computeProvisionalSemis(standings) {
+  if (!Array.isArray(standings) || standings.length === 0) return [];
 
-    const hs = Number(m?.meta?.home_sets ?? 0);
-    const as = Number(m?.meta?.away_sets ?? 0);
-    const hp = Number(m?.home_score ?? 0);
-    const ap = Number(m?.away_score ?? 0);
+  const byGroup = new Map();
+  for (const r of standings) {
+    const g = r.group_name || "-";
+    if (!byGroup.has(g)) byGroup.set(g, []);
+    byGroup.get(g).push(r);
+  }
+  for (const g of byGroup.keys()) byGroup.get(g).sort((a, b) => (a.rank ?? 999) - (b.rank ?? 999));
 
-    add(hid); add(aid);
-    agg[hid].mp += 1; agg[aid].mp += 1;
-    agg[hid].sv += hs; agg[hid].sp += as;
-    agg[aid].sv += as; agg[aid].sp += hs;
-    agg[hid].pf += hp; agg[hid].pa += ap;
-    agg[aid].pf += ap; agg[aid].pa += hp;
-
-    // vencedor do jogo
-    let homeWon = false;
-    if (hs !== as) homeWon = hs > as;
-    else if (hp !== ap) homeWon = hp > ap;
-    else homeWon = false;
-
-    if (homeWon) { agg[hid].wins += 1; agg[aid].losses += 1; }
-    else { agg[aid].wins += 1; agg[hid].losses += 1; }
+  const winners = [];
+  const seconds = [];
+  for (const [g, rows] of byGroup) {
+    if (rows[0]) winners.push({ group: g, ...rows[0] });
+    if (rows[1]) seconds.push({ group: g, ...rows[1] });
   }
 
-  return agg;
+  winners.sort(compareVolleySeed);
+  seconds.sort(compareVolleySeed);
+
+  const G = winners.length;
+  if (G >= 4) {
+    const seeds = winners.slice(0, 4);
+    return [
+      { stage: "semi", home: seeds[0], away: seeds[3] },
+      { stage: "semi", home: seeds[1], away: seeds[2] },
+    ];
+  } else if (G === 3) {
+    if (!seconds.length) return [];
+    const bestSecond = seconds[0];
+    return [
+      { stage: "semi", home: winners[0], away: bestSecond },
+      { stage: "semi", home: winners[1], away: winners[2] },
+    ];
+  } else if (G === 2) {
+    if (seconds.length < 2) return [];
+    const seeds = [...winners, seconds[0], seconds[1]].sort(compareVolleySeed);
+    return [
+      { stage: "semi", home: seeds[0], away: seeds[3] },
+      { stage: "semi", home: seeds[1], away: seeds[2] },
+    ];
+  }
+  return [];
 }
 
-function compareVolleyRows(a, b) {
-  // Pts (3 por vitória)
-  const ap = Number(a.points ?? 0), bp = Number(b.points ?? 0);
-  if (bp !== ap) return bp - ap;
-  // SV (sets vencidos) DESC
-  const asv = Number(a.sv ?? 0), bsv = Number(b.sv ?? 0);
-  if (bsv !== asv) return bsv - asv;
-  // SP (sets perdidos) ASC
-  const asp = Number(a.sp ?? 0), bsp = Number(b.sp ?? 0);
-  if (asp !== bsp) return asp - bsp;
-  // saldo de pontos (PF-PA) DESC
-  const ad = Number(a.pf ?? 0) - Number(a.pa ?? 0);
-  const bd = Number(b.pf ?? 0) - Number(b.pa ?? 0);
-  if (bd !== ad) return bd - ad;
-  // fallback determinístico
-  return String(a.team_id).localeCompare(String(b.team_id));
-}
-
-function enrichStandingsWithVolley(standings, teamsById, agg) {
-  return (standings || []).map((r) => {
-    const a = agg[r.team_id] || { mp: 0, wins: 0, losses: 0, sv: 0, sp: 0, pf: 0, pa: 0 };
-    return {
-      ...r,
-      team_name: teamsById[r.team_id]?.name || r.team_name || teamsById[r.team_id] || "—",
-      matches_played: a.mp,
-      wins: a.wins,
-      losses: a.losses,
-      sv: a.sv,
-      sp: a.sp,
-      pf: a.pf,
-      pa: a.pa,
-      points: a.wins * 3,
-    };
-  });
-}
-
+/* Tabela de classificação (lê diretamente da standings_volei_view) */
 function StandingsTable({ standings, teamsById }) {
-  // Agrupa por grupo e ordena com compareVolleyRows
   const groups = useMemo(() => {
     const map = {};
     for (const r of standings || []) {
@@ -297,7 +249,10 @@ function StandingsTable({ standings, teamsById }) {
       if (!map[g]) map[g] = [];
       map[g].push(r);
     }
-    for (const g of Object.keys(map)) map[g].sort(compareVolleyRows);
+    for (const g of Object.keys(map)) {
+      // já vem ranqueada, mas garantimos por rank crescente
+      map[g].sort((a, b) => (a.rank ?? 999) - (b.rank ?? 999));
+    }
     return map;
   }, [standings]);
 
@@ -326,20 +281,16 @@ function StandingsTable({ standings, teamsById }) {
               </tr>
             </thead>
             <tbody>
-              {groups[g].map((row, idx) => {
-                const team =
-                  teamsById[row.team_id] && typeof teamsById[row.team_id] === "object"
-                    ? teamsById[row.team_id]
-                    : { id: row.team_id, name: String(row.team_name ?? teamsById[row.team_id]?.name ?? "—") };
-                const safeTeam = { ...team, name: typeof team.name === "string" ? team.name : String(team.name ?? "—") };
-                const saldo = Number(row.pf ?? 0) - Number(row.pa ?? 0);
+              {groups[g].map((row) => {
+                const team = teamsById[row.team_id] || { id: row.team_id, name: row.team_name || "—" };
+                const saldo = Number(row.point_difference ?? ((row.pf ?? 0) - (row.pa ?? 0)));
                 return (
                   <tr key={`${g}-${row.team_id}`} className="border-b">
-                    <td className="py-1 pl-3">{idx + 1}</td>
+                    <td className="py-1 pl-3">{row.rank}</td>
                     <td className="py-1">
-                      <Link to={`/team/${safeTeam.id}`} className="flex items-center gap-2 hover:underline">
-                        <TeamBadge team={safeTeam} size={20} />
-                        <span className="truncate">{safeTeam.name}</span>
+                      <Link to={`/team/${team.id}`} className="flex items-center gap-2 hover:underline">
+                        <TeamBadge team={{ ...team, logo_url: normalizeLogo(team.logo_url) }} size={20} />
+                        <span className="truncate">{team.name}</span>
                       </Link>
                     </td>
                     <td className="py-1 text-center">{row.matches_played}</td>
@@ -357,7 +308,7 @@ function StandingsTable({ standings, teamsById }) {
             </tbody>
           </table>
           <div className="px-3 py-2 text-[10px] text-gray-500">
-            Critérios: <strong>Pontos (3 por vitória)</strong>, depois <strong>SV</strong>, <strong>SP</strong> (menor é melhor) e <strong>saldo de pontos</strong>.
+            Critérios: <strong>Pontos (3 por vitória)</strong>, depois <strong>SV</strong>, <strong>SP</strong> (menor é melhor), <strong>saldo de pontos</strong> e <strong>PF</strong>.
           </div>
         </div>
       ))}
@@ -365,87 +316,117 @@ function StandingsTable({ standings, teamsById }) {
   );
 }
 
-/* ── Knockout helpers ──────────────────────────────────────────────────────── */
-function extractKnockout(matches) {
-  const byStage = (stage) =>
-    (matches || [])
-      .filter((m) => m.stage === stage)
-      .sort((a, b) => (Number(a?.order_idx) || Number.MAX_SAFE_INTEGER) - (Number(b?.order_idx) || Number.MAX_SAFE_INTEGER));
-  const oitavas = byStage("oitavas");
-  const quartas = byStage("quartas");
-  const semis = byStage("semi");
-  const final = byStage("final");
-  const third = byStage("3lugar");
-  return { oitavas, quartas, semis, final: final[0], third: third[0] };
-}
+const norm = (s) => (typeof s === "string" ? s.trim().toLowerCase() : "");
+const normStage = (s) => {
+  const m = norm(s);
+  if (m === "semifinal" || m === "semi-final" || m === "semis") return "semi";
+  if (m === "3º" || m === "3º lugar" || m === "terceiro" || m === "3-lugar") return "3lugar";
+  return m;
+};
+const normStatus = (s) => {
+  const m = norm(s);
+  if (m === "encerrado" || m === "finalizado") return "finished";
+  if (m === "agendado" || m === "programado") return "scheduled";
+  return m || "scheduled";
+};
+const safeOrder = (r) => {
+  const oi = Number(r.order_idx);
+  const rd = Number(r.round);
+  if (Number.isFinite(oi)) return oi;
+  if (Number.isFinite(rd)) return rd;
+  return r.id;
+};
 
-// Semis provisórias típicas: Venc. A × Venc. B e Venc. C × Melhor 2º
-function computeProvisionalSemis(standingsEnriched, teamsById) {
-  if (!Array.isArray(standingsEnriched) || standingsEnriched.length === 0) return null;
-
-  const byGroup = {};
-  for (const r of standingsEnriched) {
-    const g = r.group_name || "-";
-    if (!byGroup[g]) byGroup[g] = [];
-    byGroup[g].push(r);
-  }
-  for (const g of Object.keys(byGroup)) byGroup[g].sort(compareVolleyRows);
-
-  const top = (g, idx) => (byGroup[g] && byGroup[g][idx] ? byGroup[g][idx] : null);
-
-  const winA = top("A", 0);
-  const winB = top("B", 0);
-  const winC = top("C", 0);
-
-  const seconds = [top("A", 1), top("B", 1), top("C", 1)].filter(Boolean).sort(compareVolleyRows);
-  const bestSecond = seconds[0];
-
-  const mk = (row, placeholder) =>
-    row
-      ? {
-          id: row.team_id,
-          name: row.team_name || teamsById[row.team_id]?.name || "—",
-          logo_url: teamsById[row.team_id]?.logo_url,
-          color: teamsById[row.team_id]?.color,
-        }
-      : { name: placeholder };
-
-  const semi1 = { home: mk(winA, "Vencedor Grupo A"), away: mk(winB, "Vencedor Grupo B") };
-  const semi2 = { home: mk(winC, "Vencedor Grupo C"), away: mk(bestSecond, "Melhor 2º") };
-
-  return { semi1, semi2 };
-}
-
-/* ── Error Boundary ────────────────────────────────────────────────────────── */
-class ErrorBoundary extends React.Component {
-  constructor(props) {
-    super(props);
-    this.state = { hasError: false, error: null };
-  }
-  static getDerivedStateFromError(error) {
-    return { hasError: true, error };
-  }
-  componentDidCatch(error, info) {
-    console.error("Volei ErrorBoundary:", error, info);
-  }
-  render() {
-    if (this.state.hasError) {
-      return (
-        <div className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">
-          <div className="font-semibold mb-1">Algo quebrou ao renderizar esta página.</div>
-          <div className="font-mono text-xs whitespace-pre-wrap">{String(this.state.error?.message || this.state.error)}</div>
-        </div>
-      );
+function computeStandingsFromMatchesVolley(matches, teamsById) {
+  // Vamos montar linhas por grupo, mas se não houver group_name, usamos "-" como único grupo.
+  const rows = new Map(); // key: `${group}::${teamId}` -> row
+  const key = (g, id) => `${g}::${id}`;
+  const getRow = (g, id) => {
+    const k = key(g, id);
+    if (!rows.has(k)) {
+      rows.set(k, {
+        group_name: g,
+        team_id: id,
+        team_name: teamsById?.[id]?.name ?? "—",
+        matches_played: 0,
+        wins: 0,
+        losses: 0,
+        sv: 0,
+        sp: 0,
+        pf: 0,
+        pa: 0,
+        points: 0,
+      });
     }
-    return this.props.children;
+    return rows.get(k);
+  };
+
+  const teamIdsSeen = new Set();
+
+  for (const m of matches || []) {
+    const hid = m?.home?.id;
+    const aid = m?.away?.id;
+    if (!hid || !aid) continue;
+
+    teamIdsSeen.add(hid);
+    teamIdsSeen.add(aid);
+
+    // usa "-" como grupo padrão se não vier nada
+    const g = m?.group_name || "-";
+    const hr = getRow(g, hid);
+    const ar = getRow(g, aid);
+
+    // Só contabiliza estatísticas quando estiver "finished"
+    if (m?.status !== "finished") continue;
+
+    const hs = Number(m?.meta?.home_sets ?? 0);
+    const as = Number(m?.meta?.away_sets ?? 0);
+    const hp = Number(m?.home_score ?? 0);
+    const ap = Number(m?.away_score ?? 0);
+
+    let homeWin = false, awayWin = false;
+    if (hs !== as) { homeWin = hs > as; awayWin = !homeWin; }
+    else if (hp !== ap) { homeWin = hp > ap; awayWin = !homeWin; }
+
+    hr.matches_played++; ar.matches_played++;
+    hr.sv += hs; hr.sp += as; hr.pf += hp; hr.pa += ap;
+    ar.sv += as; ar.sp += hs; ar.pf += ap; ar.pa += hp;
+
+    if (homeWin) { hr.wins++; hr.points += 3; ar.losses++; }
+    else if (awayWin) { ar.wins++; ar.points += 3; hr.losses++; }
   }
+
+  // Se não houve nenhuma partida encerrada, ainda assim garantimos linhas zeradas:
+  if (rows.size === 0 && teamIdsSeen.size > 0) {
+    for (const id of teamIdsSeen) getRow("-", id);
+  }
+
+  // Último fallback: nem matches, mas temos times carregados → mostra tabela zerada com todos os times
+  if (rows.size === 0 && teamsById && Object.keys(teamsById).length > 0) {
+    for (const id of Object.keys(teamsById)) getRow("-", id);
+  }
+
+  // Agrupa e ranqueia por grupo (usando o mesmo comparador)
+  const byGroup = {};
+  for (const r of rows.values()) {
+    r.point_difference = Number(r.pf) - Number(r.pa);
+    (byGroup[r.group_name] ||= []).push(r);
+  }
+
+  const out = [];
+  for (const g of Object.keys(byGroup).sort()) {
+    byGroup[g].sort(compareVolleySeed);
+    byGroup[g].forEach((r, i) => out.push({ ...r, rank: i + 1 }));
+  }
+  return out;
 }
 
-/* ── Página — Vôlei (Hub) ─────────────────────────────────────────────────── */
 export default function Volei() {
   const [sportId, setSportId] = useState(null);
   const [teamsById, setTeamsById] = useState({});
-  const [standingsRaw, setStandingsRaw] = useState([]); // do banco (para grupos)
+  const teamsRef = useRef({});
+  useEffect(() => { teamsRef.current = teamsById; }, [teamsById]);
+  const [standings, setStandings] = useState([]);
   const [matches, setMatches] = useState([]);
   const [loading, setLoading] = useState(true);
 
@@ -455,153 +436,193 @@ export default function Volei() {
   const channelRef = useRef(null);
   const refreshTimerRef = useRef(null);
 
-  /* Loaders */
   const loadSportId = useCallback(async () => {
     try {
-      const { data, error } = await supabase.from("sports").select("id").eq("name", "Volei").maybeSingle();
-      if (error) {
-        console.error("Erro ao carregar sport id:", error);
-        return;
+      // busca por quaisquer variações de nome
+      const { data, error } = await supabase
+        .from("sports")
+        .select("id, name")
+        .in("name", SPORT_NAMES)
+        .limit(1); // pega o 1º que aparecer
+  
+      if (error) throw error;
+      if (data && data[0]?.id) {
+        setSportId(data[0].id);
+      } else {
+        console.warn("⚠️ Esporte Vôlei não encontrado em 'sports' (nomes tentados:", SPORT_NAMES.join(", "), ")");
+        setSportId(null);
       }
-      if (data?.id) setSportId(data.id);
     } catch (e) {
       console.error("Exceção loadSportId:", e);
+      setSportId(null);
     }
-  }, []);
+  }, []);  
 
   const loadTeams = useCallback(async (sid) => {
     try {
-      const { data, error } = await supabase.from("teams").select("id, name, logo_url, color").eq("sport_id", sid);
-      if (error) {
-        console.error("Erro ao carregar teams:", error);
-        return;
+      // 1) por sport_id (normal)
+      if (sid) {
+        const byId = await supabase.from("teams").select("id, name, logo_url, color").eq("sport_id", sid);
+        if (!byId.error && Array.isArray(byId.data)) {
+          const map = {};
+          for (const t of byId.data) map[t.id] = { ...t, name: String(t.name ?? "—"), logo_url: normalizeLogo(t.logo_url) };
+          setTeamsById(map);
+          teamsRef.current = map; // mantém o ref sincronizado
+          return;
+        }
       }
+      // 2) fallback por NOME (join)
+      const byName = await supabase
+        .from("teams")
+        .select("id, name, logo_url, color, sport:sport_id!inner(name)")
+        .in("sport.name", SPORT_NAMES);
+  
+      if (byName.error) throw byName.error;
       const map = {};
-      for (const t of data || []) {
-        map[t.id] = { ...t, name: String(t.name ?? "—"), logo_url: normalizeLogo(t.logo_url) };
-      }
+      for (const t of byName.data || []) map[t.id] = { ...t, name: String(t.name ?? "—"), logo_url: normalizeLogo(t.logo_url) };
       setTeamsById(map);
+      teamsRef.current = map; // mantém o ref sincronizado
     } catch (e) {
       console.error("Exceção loadTeams:", e);
+      setTeamsById({});
+      teamsRef.current = {};
     }
-  }, []);
+  }, []);  
 
   const loadStandings = useCallback(async (sid) => {
     try {
-      const v = await supabase
-        .from("standings_view")
-        .select("group_name, rank, team_id, team_name, matches_played, wins, draws, losses, goals_for, goals_against, goal_difference, points")
-        .eq("sport_id", sid)
-        .order("group_name", { ascending: true, nullsFirst: true })
-        .order("rank", { ascending: true });
-
-      if (!v.error && v.data) {
-        setStandingsRaw(v.data);
-        return;
+      // 1) Tenta a VIEW específica do vôlei por sport_id
+      if (sid) {
+        const v = await supabase
+          .from("standings_volei_view")
+          .select("group_name, rank, team_id, team_name, matches_played, wins, losses, sv, sp, pf, pa, point_difference, points")
+          .eq("sport_id", sid)
+          .order("group_name", { ascending: true, nullsFirst: true })
+          .order("rank", { ascending: true });
+  
+        if (!v.error && Array.isArray(v.data) && v.data.length > 0) {
+          console.info("[Vôlei] standings via VIEW/sport_id:", v.data.length);
+          setStandings(v.data);
+          return;
+        }
       }
-
-      const j = await supabase
+  
+      // 2) Fallback: tabela 'standings' por sport_id
+      if (sid) {
+        const j = await supabase
+          .from("standings")
+          .select(`
+            group_name, rank, team_id,
+            matches_played, wins, losses,
+            sv, sp, pf, pa, point_difference, points,
+            team:teams!standings_team_id_fkey(name)
+          `)
+          .eq("sport_id", sid)
+          .order("group_name", { ascending: true, nullsFirst: true })
+          .order("rank", { ascending: true });
+  
+        const rowsSid = (j.data || []).map((r) => ({
+          ...r,
+          team_name: r.team?.name,
+          sv: Number(r.sv ?? 0),
+          sp: Number(r.sp ?? 0),
+          pf: Number(r.pf ?? 0),
+          pa: Number(r.pa ?? 0),
+          point_difference: Number(r.point_difference ?? ((r.pf ?? 0) - (r.pa ?? 0))),
+        }));
+  
+        if (!j.error && rowsSid.length > 0) {
+          console.info("[Vôlei] standings via TABLE/sport_id:", rowsSid.length);
+          setStandings(rowsSid);
+          return;
+        }
+      }
+  
+      // 3) Fallback final: tabela 'standings' via JOIN pelo NOME do esporte (não depende de sport_id)
+      const byName = await supabase
         .from("standings")
         .select(`
           group_name, rank, team_id,
-          matches_played, wins, draws, losses,
-          goals_for, goals_against, goal_difference, points,
-          team:teams!standings_team_id_fkey(name)
+          matches_played, wins, losses,
+          sv, sp, pf, pa, point_difference, points,
+          team:teams!inner(name, id),
+          sport:sport_id!inner(name, id)
         `)
-        .eq("sport_id", sid)
+        .in("sport.name", SPORT_NAMES)
         .order("group_name", { ascending: true, nullsFirst: true })
         .order("rank", { ascending: true });
-
-      const rows = (j.data || []).map((r) => ({ ...r, team_name: r.team?.name })) || [];
-      setStandingsRaw(rows);
+  
+      const rowsByName = (byName.data || []).map((r) => ({
+        ...r,
+        team_name: r.team?.name,
+        sv: Number(r.sv ?? 0),
+        sp: Number(r.sp ?? 0),
+        pf: Number(r.pf ?? 0),
+        pa: Number(r.pa ?? 0),
+        point_difference: Number(r.point_difference ?? ((r.pf ?? 0) - (r.pa ?? 0))),
+      }));
+  
+      console.info("[Vôlei] standings via TABLE/join por nome:", rowsByName.length, "— esportes possíveis:", SPORT_NAMES);
+      setStandings(rowsByName);
     } catch (e) {
-      console.error("Exceção loadStandings:", e);
+      console.error("Exceção loadStandings (vôlei):", e);
+      setStandings([]);
     }
-  }, []);
+  }, []);  
 
   const loadMatches = useCallback(async (sid) => {
     try {
-      // Tenta a view detalhada
-      const { data: vrows, error: verr } = await supabase
-        .from("match_detail_view")
+      if (!sid) { setMatches([]); return; }
+  
+      // Busca crua na tabela (sem joins, sem view)
+      const { data, error } = await supabase
+        .from("matches")
         .select(`
-          id, sport_id, order_idx,
+          id, sport_id,
           stage, round, group_name, starts_at, updated_at, venue, status, meta,
-          home_team_id, home_team_name, home_team_color, home_team_logo,
-          away_team_id, away_team_name, away_team_color, away_team_logo,
-          home_score, away_score
+          home_team_id, away_team_id, home_score, away_score
         `)
         .eq("sport_id", sid);
-
-      let rows = [];
-      if (!verr && vrows?.length) {
-        rows = vrows.map((r) => ({
-          id: r.id,
-          sport_id: r.sport_id,
-          order_idx: r.order_idx,
-          stage: r.stage,
-          round: r.round,
-          group_name: r.group_name,
-          starts_at: r.starts_at,
-          updated_at: r.updated_at,
-          venue: r.venue,
-          status: r.status,
-          meta: r.meta,
-          home_score: r.home_score,
-          away_score: r.away_score,
-          home: r.home_team_id
-            ? { id: r.home_team_id, name: String(r.home_team_name ?? "A definir"), color: r.home_team_color, logo_url: normalizeLogo(r.home_team_logo) }
-            : null,
-          away: r.away_team_id
-            ? { id: r.away_team_id, name: String(r.away_team_name ?? "A definir"), color: r.away_team_color, logo_url: normalizeLogo(r.away_team_logo) }
-            : null,
-        }));
-      } else {
-        // Fallback: tabela matches
-        const { data: jrows, error: jerr } = await supabase
-          .from("matches")
-          .select(`
-            id, order_idx, stage, round, group_name, starts_at, updated_at, venue, status, meta,
-            home_score, away_score,
-            home:home_team_id ( id, name, logo_url, color ),
-            away:away_team_id ( id, name, logo_url, color ),
-            home_team_id, away_team_id
-          `)
-          .eq("sport_id", sid);
-
-        if (jerr) {
-          console.error("Erro matches fallback:", jerr);
-          setMatches([]);
-          return;
-        }
-
-        rows = (jrows || []).map((m) => ({
-          ...m,
-          order_idx: m.order_idx ?? m.round ?? m.id,
-          home: m.home ? { ...m.home, name: String(m.home.name ?? "A definir"), logo_url: normalizeLogo(m.home.logo_url) } : null,
-          away: m.away ? { ...m.away, name: String(m.away.name ?? "A definir"), logo_url: normalizeLogo(m.away.logo_url) } : null,
-        }));
-      }
-
-      // Ordenação robusta por fase + ordem estável
+  
+      if (error) throw error;
+  
+      // Monta objeto de time sem depender de join
+      const mkTeam = (id) => (id ? ({ ...(teamsRef.current[id] || {}), id, name: String((teamsRef.current[id]?.name ?? "A definir")) }) : null);
+  
+      const rows = (data || []).map((r) => ({
+        id: r.id,
+        sport_id: r.sport_id,
+        order_idx: safeOrder(r),
+        stage: normStage(r.stage),
+        round: r.round,
+        group_name: r.group_name,
+        starts_at: r.starts_at,
+        updated_at: r.updated_at,
+        venue: r.venue,
+        status: normStatus(r.status),
+        meta: r.meta,                      // contém sets se você usar isso no placar
+        home_score: r.home_score,
+        away_score: r.away_score,
+        home: mkTeam(r.home_team_id),
+        away: mkTeam(r.away_team_id),
+      }));
+  
       const phaseRank = { grupos: 1, oitavas: 2, quartas: 3, semi: 4, "3lugar": 5, final: 6 };
-      const ord = (x) => {
-        const v = Number(x?.order_idx);
-        return Number.isFinite(v) ? v : Number.MAX_SAFE_INTEGER;
-      };
-      rows.sort((a, b) => {
-        const pa = phaseRank[a.stage] ?? 99;
-        const pb = phaseRank[b.stage] ?? 99;
-        if (pa !== pb) return pa - pb;
-        return ord(a) - ord(b);
-      });
-
+      const ord = (x) => (Number.isFinite(Number(x?.order_idx)) ? Number(x.order_idx) : Number.MAX_SAFE_INTEGER);
+  
+      rows.sort((a, b) =>
+        (phaseRank[a.stage] ?? 99) - (phaseRank[b.stage] ?? 99) || ord(a) - ord(b)
+      );
+  
       setMatches(rows);
+  
+      // (opcional) log para sanity-check
+      console.info("[Vôlei] matches carregados:", rows.length);
     } catch (e) {
-      console.error("Exceção loadMatches:", e);
+      console.error("Exceção loadMatches (vôlei):", e);
       setMatches([]);
     }
-  }, []);
+  }, []);  
 
   const loadAll = useCallback(
     async (sid, { skeleton = false } = {}) => {
@@ -609,92 +630,85 @@ export default function Volei() {
       try {
         await Promise.all([loadTeams(sid), loadStandings(sid), loadMatches(sid)]);
       } finally {
-        if (skeleton) setLoading(false);
+        setLoading(false);
       }
     },
     [loadTeams, loadStandings, loadMatches]
   );
 
-  /* Effects */
-  useEffect(() => {
-    loadSportId();
-  }, [loadSportId]);
+  useEffect(() => { loadSportId(); }, [loadSportId]);
 
   useEffect(() => {
-    if (!sportId) return;
+    if (!sportId) {
+      setLoading(false);
+      return;
+    }
     loadAll(sportId, { skeleton: true });
-
-    // Realtime com debounce
+  
     if (channelRef.current) {
       try { supabase.removeChannel(channelRef.current); } catch {}
       channelRef.current = null;
     }
+    const onChange = () => {
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+      refreshTimerRef.current = setTimeout(() => loadAll(sportId, { skeleton: false }), 1000);
+    };
     const ch = supabase
       .channel(`volei-hub-${sportId}`)
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "matches", filter: `sport_id=eq.${sportId}` },
-        () => {
-          if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
-          refreshTimerRef.current = setTimeout(() => loadAll(sportId, { skeleton: false }), 200);
-        }
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "standings" },
-        () => {
-          if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
-          refreshTimerRef.current = setTimeout(() => loadAll(sportId, { skeleton: false }), 200);
-        }
-      )
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "matches", filter: `sport_id=eq.${sportId}` }, onChange)
+      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "matches", filter: `sport_id=eq.${sportId}` }, onChange)
+      .on("postgres_changes", { event: "DELETE", schema: "public", table: "matches", filter: `sport_id=eq.${sportId}` }, onChange)
       .subscribe();
     channelRef.current = ch;
-
+  
     return () => {
-      if (refreshTimerRef.current) {
-        clearTimeout(refreshTimerRef.current);
-        refreshTimerRef.current = null;
-      }
-      if (channelRef.current) {
-        try { supabase.removeChannel(channelRef.current); } catch {}
-        channelRef.current = null;
-      }
+      if (refreshTimerRef.current) { clearTimeout(refreshTimerRef.current); refreshTimerRef.current = null; }
+      if (channelRef.current) { try { supabase.removeChannel(channelRef.current); } catch {} channelRef.current = null; }
     };
-  }, [sportId, loadAll]);
+  }, [sportId, loadAll]);  
 
-  /* Derivações */
-  const hasGroups = useMemo(() => (standingsRaw?.length ? true : (matches || []).some((m) => !!m.group_name)), [standingsRaw, matches]);
+  useEffect(() => {
+    if (!loading && standings.length === 0 && matches.length > 0) {
+      const computed = computeStandingsFromMatchesVolley(matches, teamsRef.current);
+      if (computed.length) {
+        console.info("[Vôlei] standings derivadas de matches:", computed.length);
+        setStandings(computed);
+      }
+    }
+  }, [loading, standings.length, matches]);
 
-  // Apuração específica do vôlei (a partir das partidas) + enriquecimento das linhas da classificação
-  const volleyAgg = useMemo(() => computeVolleyAgg(matches), [matches]);
-  const standings = useMemo(() => enrichStandingsWithVolley(standingsRaw, teamsById, volleyAgg), [standingsRaw, teamsById, volleyAgg]);
+  const hasGroups = standings.length > 0;
+  const knockout = useMemo(() => {
+    const byStage = (stage) =>
+      (matches || [])
+        .filter((m) => m.stage === stage)
+        .sort((a, b) => (Number(a?.order_idx) || Number.MAX_SAFE_INTEGER) - (Number(b?.order_idx) || Number.MAX_SAFE_INTEGER));
+    const semis = byStage("semi");
+    const final = byStage("final");
+    const third = byStage("3lugar");
+    return { semis, final: final[0], third: third[0] };
+  }, [matches]);
 
-  const knockout = useMemo(() => extractKnockout(matches), [matches]);
-  const provisionalSemis = useMemo(() => computeProvisionalSemis(standings, teamsById), [standings, teamsById]);
+  const provisionalSemis = useMemo(() => computeProvisionalSemis(standings), [standings]);
+  const semisToShow = knockout.semis?.length ? knockout.semis : provisionalSemis || [];
 
   const groupOptions = useMemo(() => {
-    const set = new Set();
-    (matches || []).forEach((m) => m.group_name && set.add(m.group_name));
+    const set = new Set(); (matches || []).forEach((m) => m.group_name && set.add(m.group_name));
     return ["todos", ...Array.from(set).sort()];
   }, [matches]);
 
   const stageOptions = useMemo(() => {
-    const set = new Set();
-    (matches || []).forEach((m) => m.stage && set.add(m.stage));
+    const set = new Set(); (matches || []).forEach((m) => m.stage && set.add(m.stage));
     const order = ["grupos", "oitavas", "quartas", "semi", "3lugar", "final"];
     const ordered = Array.from(set).sort((a, b) => (order.indexOf(a) + 100) - (order.indexOf(b) + 100));
     return ["todos", ...ordered];
   }, [matches]);
 
   const scheduledAll = useMemo(() => {
-    let arr = (matches || []).filter((m) => {
-      if (m.status !== "scheduled") return false;
-      if (m.group_name) return true;
-      return m.home?.id && m.away?.id;
-    });
+    let arr = (matches || []).filter((m) => m.status === "scheduled");
     if (groupFilter !== "todos") arr = arr.filter((m) => m.group_name === groupFilter);
     if (stageFilter !== "todos") arr = arr.filter((m) => m.stage === stageFilter);
-    arr.sort((a, b) => ts(a.starts_at) - ts(b.starts_at));
+    arr.sort((a, b) => (ts(a.starts_at) - ts(b.starts_at)) || ((a.order_idx ?? 1) - (b.order_idx ?? 1)));
     return arr;
   }, [matches, groupFilter, stageFilter]);
 
@@ -704,22 +718,19 @@ export default function Volei() {
     return arr.slice(0, 12);
   }, [matches]);
 
-  /* Render */
   return (
     <ErrorBoundary>
       <div className="space-y-10">
-        {/* Header */}
         <header className="space-y-1">
           <div className="flex items-center gap-2">
             <span className="text-2xl">{SPORT_ICON}</span>
             <h2 className="text-2xl font-bold">{SPORT_LABEL}</h2>
           </div>
           <p className="text-sm text-gray-600">
-            Classificação por <strong>vitórias em sets</strong> (3 pts por vitória). Empate em sets é desempatado por <strong>pontos do placar</strong>.
+            Classificação por <strong>sets</strong> (3 pts por vitória). Empate em sets desempata por <strong>pontos do placar</strong>.
           </p>
         </header>
 
-        {/* Skeleton */}
         {loading ? (
           <div className="space-y-6">
             <div className="h-6 w-48 rounded bg-gray-100 animate-pulse" />
@@ -731,7 +742,6 @@ export default function Volei() {
           </div>
         ) : (
           <>
-            {/* 1) CLASSIFICAÇÃO */}
             {hasGroups && (
               <section className="space-y-4">
                 <h3 className="text-lg font-bold">Tabela de classificação</h3>
@@ -739,52 +749,22 @@ export default function Volei() {
               </section>
             )}
 
-            {/* 2) CHAVEAMENTO */}
             <section className="space-y-4">
               <h3 className="text-lg font-bold">Chaveamento</h3>
 
-              {/* Oitavas (se existir) */}
-              {knockout.oitavas?.length ? (
-                <div className="space-y-2">
-                  <h4 className="text-sm font-semibold text-gray-700">Oitavas de final</h4>
-                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                    {knockout.oitavas.map((m, i) => (
-                      <BracketMatchCard key={`o-${m?.id ?? i}`} match={m} />
-                    ))}
-                  </div>
+              {/* Semifinais — definitivas ou provisórias */}
+              <div className="space-y-2">
+                <h4 className="text-sm font-semibold text-gray-700">Semifinais</h4>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  {Array.from({ length: Math.max(semisToShow.length, 2) }).map((_, i) => {
+                    const m = semisToShow[i];
+                    const ph = !m
+                      ? { home: i === 0 ? "A definir" : "A definir", away: "A definir" }
+                      : undefined;
+                    return <BracketMatchCard key={`s-${m?.id ?? i}`} match={m} placeholder={ph} />;
+                  })}
                 </div>
-              ) : null}
-
-              {/* Quartas (se existir ou placeholder a partir da classificação) */}
-              {knockout.quartas?.length ? (
-                <div className="space-y-2">
-                  <h4 className="text-sm font-semibold text-gray-700">Quartas de final</h4>
-                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                    {knockout.quartas.map((m, i) => (
-                      <BracketMatchCard key={`q-${m?.id ?? i}`} match={m} />
-                    ))}
-                  </div>
-                </div>
-              ) : null}
-
-              {/* Semis — definitivas ou provisórias */}
-              {(knockout.semis?.length || provisionalSemis) ? (
-                <div className="space-y-2">
-                  <h4 className="text-sm font-semibold text-gray-700">Semifinais</h4>
-                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                    {Array.from({ length: Math.max(knockout.semis?.length || 0, 2) }).map((_, i) => {
-                      const m = knockout.semis?.[i];
-                      const ph =
-                        !m && provisionalSemis
-                          ? i === 0
-                            ? { home: provisionalSemis.semi1.home?.name, away: provisionalSemis.semi1.away?.name }
-                            : { home: provisionalSemis.semi2.home?.name, away: provisionalSemis.semi2.away?.name }
-                          : undefined;
-                      return <BracketMatchCard key={`s-${m?.id ?? i}`} match={m} placeholder={ph} />;
-                    })}
-                  </div>
-                </div>
-              ) : null}
+              </div>
 
               {/* Final */}
               <div className="space-y-2">
@@ -797,52 +777,46 @@ export default function Volei() {
                   </div>
                 )}
               </div>
+
+              {/* 3º lugar (se existir) */}
+              {knockout.third ? (
+                <div className="space-y-2">
+                  <h4 className="text-sm font-semibold text-gray-700">3º lugar</h4>
+                  <BracketMatchCard match={knockout.third} />
+                </div>
+              ) : null}
             </section>
 
-            {/* 3) JOGOS AGENDADOS */}
             <section className="space-y-4">
               <h3 className="text-lg font-bold">Jogos agendados</h3>
-
-              {/* Filtros */}
               <div className="flex flex-wrap items-center gap-2 text-sm">
                 <label className="text-gray-600">Grupo:</label>
                 <select value={groupFilter} onChange={(e) => setGroupFilter(e.target.value)} className="rounded-md border border-gray-300 bg-white px-2 py-1">
-                  {groupOptions.map((g) => (
-                    <option key={g} value={g}>
-                      {g === "todos" ? "Todos" : `Grupo ${g}`}
-                    </option>
+                  {["todos", ...new Set((matches || []).map((m) => m.group_name).filter(Boolean)).values()].map((g) => (
+                    <option key={g} value={g}>{g === "todos" ? "Todos" : `Grupo ${g}`}</option>
                   ))}
                 </select>
-
                 <label className="text-gray-600">Fase:</label>
                 <select value={stageFilter} onChange={(e) => setStageFilter(e.target.value)} className="rounded-md border border-gray-300 bg-white px-2 py-1">
-                  {stageOptions.map((st) => (
-                    <option key={st} value={st}>
-                      {st === "todos" ? "Todas" : friendlyStage(st)}
-                    </option>
+                  {["todos", ...new Set((matches || []).map((m) => m.stage).filter(Boolean)).values()].map((st) => (
+                    <option key={st} value={st}>{st === "todos" ? "Todas" : friendlyStage(st)}</option>
                   ))}
                 </select>
               </div>
 
-              {/* Lista */}
               {scheduledAll.length ? (
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                  {scheduledAll.map((m, i) => (
-                    <ListMatchCard key={m.id ?? `sched-${i}`} match={m} />
-                  ))}
+                  {scheduledAll.map((m, i) => <ListMatchCard key={m.id ?? `sched-${i}`} match={m} />)}
                 </div>
               ) : (
                 <div className="text-xs text-gray-500">Nenhum jogo agendado no momento.</div>
               )}
 
-              {/* Encerrados (recentes) */}
               <div className="space-y-2">
                 <h4 className="text-sm font-semibold text-gray-700">Encerrados (recentes)</h4>
                 {finishedRecent.length ? (
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                    {finishedRecent.map((m, i) => (
-                      <ListMatchCard key={m.id ?? `fin-${i}`} match={m} />
-                    ))}
+                    {finishedRecent.map((m, i) => <ListMatchCard key={m.id ?? `fin-${i}`} match={m} />)}
                   </div>
                 ) : (
                   <div className="text-xs text-gray-500">Sem resultados recentes.</div>
@@ -850,17 +824,15 @@ export default function Volei() {
               </div>
             </section>
 
-            {/* 4) REGULAMENTO */}
             <section className="space-y-3">
               <h3 className="text-lg font-bold">Regulamento</h3>
               <div className="rounded-2xl border border-gray-200 bg-white p-4 text-sm text-gray-700 shadow-sm">
                 <ul className="list-disc space-y-1 pl-5">
-                  <li><strong>Vitória do jogo:</strong> definida por <strong>sets</strong>; se empatar em sets, desempata por <strong>pontos do placar</strong>.</li>
-                  <li><strong>Classificação nos grupos:</strong> <strong>Pts</strong> (3 por vitória) ↓, depois <strong>SV</strong> ↓, <strong>SP</strong> ↑ e <strong>saldo de pontos</strong> ↓.</li>
-                  <li><strong>Duração/placar:</strong> partidas em <strong>um set de 15 pontos</strong>, com <strong>2 de vantagem</strong>.</li>
-                  <li><strong>Mata-mata:</strong> jogo único; empates seguem a regra definida pela organização.</li>
+                  <li><strong>Vitória do jogo:</strong> por <strong>sets</strong>; se empatar em sets, desempata por <strong>pontos do placar</strong>.</li>
+                  <li><strong>Classificação (grupos):</strong> Pts (3 por vitória) ↓, SV ↓, SP ↑, saldo (PF−PA) ↓, PF ↓.</li>
+                  <li><strong>Duração/placar típico:</strong> um set a 15 (2 de vantagem) — ajuste conforme a organização.</li>
+                  <li><strong>Mata-mata:</strong> jogo único; empates seguem a regra da organização.</li>
                 </ul>
-                {/* <a href="/regulamento-volei.pdf" className="mt-2 inline-flex text-blue-600 hover:underline">Abrir regulamento completo</a> */}
               </div>
             </section>
           </>

@@ -158,7 +158,7 @@ function TeamChip({ team, align = "left", badge = 28 }) {
 function BracketMatchCard({ match, placeholder }) {
   const home = match?.home || (placeholder?.home ? { name: placeholder.home } : null);
   const away = match?.away || (placeholder?.away ? { name: placeholder.away } : null);
-  const showScore = match && match.status !== "scheduled";
+  const showScore = match?.status && match.status !== "scheduled";
   const homeScore = Number(match?.home_score ?? 0);
   const awayScore = Number(match?.away_score ?? 0);
 
@@ -218,6 +218,92 @@ function ListMatchCard({ match }) {
   );
 }
 
+
+// Ordena: Pontos ↓, Vitórias ↓, Saldo de Gols ↓, Gols Pró ↓, (fallback por id)
+function compareByPoints(a, b) {
+  const ap = Number(a.points ?? 0), bp = Number(b.points ?? 0);
+  if (bp !== ap) return bp - ap;
+
+  const aw = Number(a.wins ?? 0), bw = Number(b.wins ?? 0);
+  if (bw !== aw) return bw - aw;
+
+  const agd = Number(
+    a.goal_difference ?? (Number(a.goals_for ?? 0) - Number(a.goals_against ?? 0))
+  );
+  const bgd = Number(
+    b.goal_difference ?? (Number(b.goals_for ?? 0) - Number(b.goals_against ?? 0))
+  );
+  if (bgd !== agd) return bgd - agd;
+
+  const agf = Number(a.goals_for ?? 0), bgf = Number(b.goals_for ?? 0);
+  if (bgf !== agf) return bgf - agf;
+
+  return String(a.team_id).localeCompare(String(b.team_id));
+}
+
+// Critério de ordenação provisória (igual compareByPoints)
+function sortRule(a, b) {
+  return (
+    (b.points ?? 0) - (a.points ?? 0) ||
+    (b.wins ?? 0) - (a.wins ?? 0) ||
+    (b.goal_difference ?? 0) - (a.goal_difference ?? 0) ||
+    (b.goals_for ?? 0) - (a.goals_for ?? 0) ||
+    String(a.team_id).localeCompare(String(b.team_id))
+  );
+}
+
+function computeProvisionalSemis(standings, teamsById = {}) {
+  if (!Array.isArray(standings) || standings.length === 0) return [];
+
+  const mkTeam = (row) => {
+    const t = teamsById[row.team_id];
+    return t
+      ? { id: row.team_id, name: String(t.name ?? row.team_name ?? "—"), color: t.color, logo_url: t.logo_url }
+      : { id: row.team_id, name: String(row.team_name ?? "—") };
+  };
+
+  const byGroup = new Map();
+  for (const r of standings) {
+    const g = r.group_name || "-";
+    if (!byGroup.has(g)) byGroup.set(g, []);
+    byGroup.get(g).push(r);
+  }
+  for (const g of byGroup.keys()) byGroup.get(g).sort(sortRule);
+
+  const winners = [];
+  const seconds = [];
+  for (const [g, rows] of byGroup) {
+    if (rows[0]) winners.push({ group: g, row: rows[0] });
+    if (rows[1]) seconds.push({ group: g, row: rows[1] });
+  }
+
+  winners.sort((a, b) => sortRule(a.row, b.row));
+  seconds.sort((a, b) => sortRule(a.row, b.row));
+
+  const G = winners.length;
+  if (G >= 4) {
+    const seeds = winners.slice(0, 4);
+    return [
+      { stage: "semi", home: mkTeam(seeds[0].row), away: mkTeam(seeds[3].row) },
+      { stage: "semi", home: mkTeam(seeds[1].row), away: mkTeam(seeds[2].row) },
+    ];
+  } else if (G === 3) {
+    if (!seconds.length) return [];
+    return [
+      { stage: "semi", home: mkTeam(winners[0].row), away: mkTeam(seconds[0].row) },
+      { stage: "semi", home: mkTeam(winners[1].row), away: mkTeam(winners[2].row) },
+    ];
+  } else if (G === 2) {
+    if (seconds.length < 2) return [];
+    const seeds = [winners[0].row, winners[1].row, seconds[0].row, seconds[1].row].sort(sortRule);
+    return [
+      { stage: "semi", home: mkTeam(seeds[0]), away: mkTeam(seeds[3]) },
+      { stage: "semi", home: mkTeam(seeds[1]), away: mkTeam(seeds[2]) },
+    ];
+  }
+  return [];
+}
+
 /* =========================
    Classificação (tabelas)
    ========================= */
@@ -230,7 +316,8 @@ function StandingsTable({ standings, teamsById }) {
       map[g].push(r);
     }
     for (const g of Object.keys(map)) {
-      map[g].sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99));
+      map[g].sort(compareByPoints);
+      map[g] = map[g].map((row, i) => ({ ...row, rank: i + 1 }));
     }
     return map;
   }, [standings]);
@@ -343,106 +430,162 @@ export default function Futsal() {
 
   const loadTeams = useCallback(async (sid) => {
     try {
-      const { data, error } = await supabase.from("teams").select("id, name, logo_url, color").eq("sport_id", sid);
-      if (error) throw error;
-      const map = {};
-      for (const t of data || []) {
-        map[t.id] = { ...t, name: String(t.name ?? "—"), logo_url: normalizeLogo(t.logo_url) };
+      // 1) tenta por sport_id (se recebido)
+      if (sid) {
+        const byId = await supabase
+          .from("teams")
+          .select("id, name, logo_url, color")
+          .eq("sport_id", sid);
+  
+        if (!byId.error && Array.isArray(byId.data) && byId.data.length > 0) {
+          const map = {};
+          for (const t of byId.data) map[t.id] = { ...t, name: String(t.name ?? "—"), logo_url: normalizeLogo(t.logo_url) };
+          setTeamsById(map);
+          return;
+        }
       }
+  
+      // 2) fallback por NOME (join inner)
+      const byName = await supabase
+        .from("teams")
+        .select("id, name, logo_url, color, sport:sport_id!inner(name)")
+        .eq("sport.name", "Futsal");
+  
+      if (byName.error) throw byName.error;
+  
+      const map = {};
+      for (const t of byName.data || []) map[t.id] = { ...t, name: String(t.name ?? "—"), logo_url: normalizeLogo(t.logo_url) };
       setTeamsById(map);
-      console.log("ⓘ teams:", Object.keys(map).length);
     } catch (e) {
       console.error("Exceção loadTeams:", e);
       setTeamsById({});
     }
   }, []);
-
+  
   const loadStandings = useCallback(async (sid) => {
     try {
-      const v = await supabase
+      // 1) VIEW por sport_id
+      if (sid) {
+        const v = await supabase
+          .from("standings_view")
+          .select("group_name, rank, team_id, team_name, matches_played, wins, draws, losses, goals_for, goals_against, goal_difference, points")
+          .eq("sport_id", sid)
+          .order("group_name", { ascending: true, nullsFirst: true })
+          .order("rank", { ascending: true });
+  
+        if (!v.error && Array.isArray(v.data) && v.data.length > 0) {
+          setStandings(v.data);
+          return;
+        }
+      }
+  
+      // 2) VIEW por NOME (join inner)
+      const v2 = await supabase
         .from("standings_view")
-        .select("group_name, rank, team_id, team_name, matches_played, wins, draws, losses, goals_for, goals_against, goal_difference, points")
-        .eq("sport_id", sid)
+        .select("group_name, rank, team_id, team_name, matches_played, wins, draws, losses, goals_for, goals_against, goal_difference, points, sport:sport_id!inner(name)")
+        .eq("sport.name", "Futsal")
         .order("group_name", { ascending: true, nullsFirst: true })
         .order("rank", { ascending: true });
-
-      if (!v.error && v.data) {
-        setStandings(v.data);
-        console.log("ⓘ standings(view):", v.data.length);
+  
+      if (!v2.error && Array.isArray(v2.data) && v2.data.length > 0) {
+        // descarta a coluna embutida sport
+        setStandings(v2.data.map(({ sport, ...r }) => r));
         return;
       }
-
-      const j = await supabase
+  
+      // 3) TABELA por sport_id
+      if (sid) {
+        const j = await supabase
+          .from("standings")
+          .select(`
+            group_name, rank, team_id,
+            matches_played, wins, draws, losses,
+            goals_for, goals_against, goal_difference, points,
+            team:teams!standings_team_id_fkey(name)
+          `)
+          .eq("sport_id", sid)
+          .order("group_name", { ascending: true, nullsFirst: true })
+          .order("rank", { ascending: true });
+  
+        if (!j.error && Array.isArray(j.data) && j.data.length > 0) {
+          setStandings(j.data.map((r) => ({ ...r, team_name: r.team?.name })));
+          return;
+        }
+      }
+  
+      // 4) TABELA por NOME (join inner)
+      const j2 = await supabase
         .from("standings")
         .select(`
           group_name, rank, team_id,
           matches_played, wins, draws, losses,
           goals_for, goals_against, goal_difference, points,
-          team:teams!standings_team_id_fkey(name)
+          team:teams!standings_team_id_fkey(name),
+          sport:sport_id!inner(name)
         `)
-        .eq("sport_id", sid)
+        .eq("sport.name", "Futsal")
         .order("group_name", { ascending: true, nullsFirst: true })
         .order("rank", { ascending: true });
-
-      const rows = (j.data || []).map((r) => ({ ...r, team_name: r.team?.name })) || [];
-      setStandings(rows);
-      console.log("ⓘ standings(fallback):", rows.length);
+  
+      const rows2 = (j2.data || []).map((r) => ({ ...r, team_name: r.team?.name }));
+      setStandings(rows2);
     } catch (e) {
       console.error("Exceção loadStandings:", e);
       setStandings([]);
     }
-  }, []);
+  }, []);  
 
   const loadMatches = useCallback(async (sid) => {
     try {
-      // View detalhada preferida
-      const { data: vrows, error: verr } = await supabase
-        .from("match_detail_view")
-        .select(`
-          id, sport_id, order_idx,
-          stage, round, group_name, starts_at, updated_at, venue, status,
-          home_team_id, home_team_name, home_team_color, home_team_logo,
-          away_team_id, away_team_name, away_team_color, away_team_logo,
-          home_score, away_score
-        `)
-        .eq("sport_id", sid);
-
+      // Preferência: VIEW por sport_id
       let rows = [];
-      if (!verr && vrows?.length) {
-        rows = vrows.map((r) => ({
-          id: r.id,
-          sport_id: r.sport_id,
-          order_idx: r.order_idx,
-          stage: r.stage,
-          round: r.round,
-          group_name: r.group_name,
-          starts_at: r.starts_at,
-          updated_at: r.updated_at,
-          venue: r.venue,
-          status: r.status,
-          home_score: r.home_score,
-          away_score: r.away_score,
-          home: r.home_team_id
-            ? { id: r.home_team_id, name: String(r.home_team_name ?? "A definir"), color: r.home_team_color, logo_url: normalizeLogo(r.home_team_logo) }
-            : null,
-          away: r.away_team_id
-            ? { id: r.away_team_id, name: String(r.away_team_name ?? "A definir"), color: r.away_team_color, logo_url: normalizeLogo(r.away_team_logo) }
-            : null,
-        }));
-      } else {
-        // Fallback: tabela matches + join
+      if (sid) {
+        const { data: vrows, error: verr } = await supabase
+          .from("match_detail_view")
+          .select(`
+            id, sport_id, order_idx,
+            stage, round, group_name, starts_at, updated_at, venue, status,
+            home_team_id, home_team_name, home_team_color, home_team_logo,
+            away_team_id, away_team_name, away_team_color, away_team_logo,
+            home_score, away_score
+          `)
+          .eq("sport_id", sid);
+  
+        if (!verr && Array.isArray(vrows) && vrows.length) {
+          rows = vrows.map((r) => ({
+            id: r.id,
+            sport_id: r.sport_id,
+            order_idx: r.order_idx,
+            stage: r.stage,
+            round: r.round,
+            group_name: r.group_name,
+            starts_at: r.starts_at,
+            updated_at: r.updated_at,
+            venue: r.venue,
+            status: r.status,
+            home_score: r.home_score,
+            away_score: r.away_score,
+            home: r.home_team_id ? { id: r.home_team_id, name: String(r.home_team_name ?? "A definir"), color: r.home_team_color, logo_url: normalizeLogo(r.home_team_logo) } : null,
+            away: r.away_team_id ? { id: r.away_team_id, name: String(r.away_team_name ?? "A definir"), color: r.away_team_color, logo_url: normalizeLogo(r.away_team_logo) } : null,
+          }));
+        }
+      }
+  
+      // Fallback: TABELA por NOME (join inner)
+      if (!rows.length) {
         const { data: jrows, error: jerr } = await supabase
           .from("matches")
           .select(`
             id, stage, round, group_name, starts_at, updated_at, venue, status,
             home_score, away_score, order_idx,
             home:home_team_id ( id, name, logo_url, color ),
-            away:away_team_id ( id, name, logo_url, color )
+            away:away_team_id ( id, name, logo_url, color ),
+            sport:sport_id!inner(name)
           `)
-          .eq("sport_id", sid);
-
+          .eq("sport.name", "Futsal");
+  
         if (jerr) throw jerr;
-
+  
         rows = (jrows || []).map((m) => ({
           ...m,
           order_idx: m.order_idx ?? m.round ?? m.id,
@@ -450,27 +593,18 @@ export default function Futsal() {
           away: m.away ? { ...m.away, name: String(m.away.name ?? "A definir"), logo_url: normalizeLogo(m.away.logo_url) } : null,
         }));
       }
-
-      // Ordenação
+  
+      // Ordenação original
       const phaseRank = { grupos: 1, oitavas: 2, quartas: 3, semi: 4, "3lugar": 5, final: 6 };
-      const ord = (x) => {
-        const v = Number(x?.order_idx);
-        return Number.isFinite(v) ? v : Number.MAX_SAFE_INTEGER;
-      };
-      rows.sort((a, b) => {
-        const pa = phaseRank[a.stage] ?? 99;
-        const pb = phaseRank[b.stage] ?? 99;
-        if (pa !== pb) return pa - pb;
-        return ord(a) - ord(b);
-      });
-
+      const ord = (x) => (Number.isFinite(Number(x?.order_idx)) ? Number(x.order_idx) : Number.MAX_SAFE_INTEGER);
+      rows.sort((a, b) => (phaseRank[a.stage] ?? 99) - (phaseRank[b.stage] ?? 99) || ord(a) - ord(b));
+  
       setMatches(rows);
-      console.log("ⓘ matches:", rows.length);
     } catch (e) {
       console.error("Exceção loadMatches:", e);
       setMatches([]);
     }
-  }, []);
+  }, []);  
 
   const loadAll = useCallback(
     async (sid, { skeleton = false } = {}) => {
@@ -501,25 +635,29 @@ export default function Futsal() {
       try { supabase.removeChannel(channelRef.current); } catch {}
       channelRef.current = null;
     }
-    const ch = supabase
-      .channel(`futsal-hub-${sportId}`)
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "matches", filter: `sport_id=eq.${sportId}` },
-        () => {
-          if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
-          refreshTimerRef.current = setTimeout(() => loadAll(sportId, { skeleton: false }), 200);
-        }
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "standings" },
-        () => {
-          if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
-          refreshTimerRef.current = setTimeout(() => loadAll(sportId, { skeleton: false }), 200);
-        }
-      )
-      .subscribe();
+  const ch = supabase
+    .channel(`futsal-hub`)
+    .on(
+      "postgres_changes",
+      // se tiver sportId, mantenha o filtro; senão, sem filtro
+      sportId
+        ? { event: "*", schema: "public", table: "matches", filter: `sport_id=eq.${sportId}` }
+        : { event: "*", schema: "public", table: "matches" },
+      () => {
+        if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = setTimeout(() => loadAll(sportId, { skeleton: false }), 200);
+      }
+    )
+    .on(
+      "postgres_changes",
+      { event: "*", schema: "public", table: "standings" },
+      () => {
+        if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = setTimeout(() => loadAll(sportId, { skeleton: false }), 200);
+      }
+    )
+  .subscribe();
+
     channelRef.current = ch;
 
     return () => {
@@ -537,6 +675,13 @@ export default function Futsal() {
   /* Derivações */
   const hasGroups = useMemo(() => (standings?.length ? true : (matches || []).some((m) => !!m.group_name)), [standings, matches]);
   const knockout = useMemo(() => extractKnockout(matches), [matches]);
+
+  // Semifinais provisórias
+  const provisionalSemis = useMemo(
+    () => computeProvisionalSemis(standings, teamsById),
+    [standings, teamsById]
+  );  
+  const semisToShow = knockout.semis?.length ? knockout.semis : provisionalSemis;
 
   const groupOptions = useMemo(() => {
     const set = new Set();
@@ -581,8 +726,8 @@ export default function Futsal() {
             <h2 className="text-2xl font-bold">{SPORT_LABEL}</h2>
           </div>
           <p className="text-sm text-gray-600">
-            Hub informativo: <strong>classificação</strong> (se houver grupos) → <strong>chaveamento</strong> →{" "}
-            <strong>jogos agendados</strong> → <strong>regulamento</strong>. Não há indicadores de “ao vivo/pausado” nesta página.
+            Hub informativo: <strong>classificação</strong> → <strong>chaveamento</strong> →{" "}
+            <strong>jogos agendados</strong> → <strong>regulamento</strong>.
           </p>
         </header>
 
@@ -611,11 +756,11 @@ export default function Futsal() {
               <h3 className="text-lg font-bold">Chaveamento</h3>
 
               {/* Semifinais */}
-              {knockout.semis?.length ? (
+              {semisToShow?.length ? (
                 <div className="space-y-2">
                   <h4 className="text-sm font-semibold text-gray-700">Semifinais</h4>
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                    {knockout.semis.map((m, i) => (
+                    {semisToShow.map((m, i) => (
                       <BracketMatchCard key={`s-${m?.id ?? i}`} match={m} />
                     ))}
                   </div>

@@ -3,9 +3,8 @@ import React, { useEffect, useState, useRef, useMemo } from "react";
 import { supabase } from "../../supabaseClient";
 import TeamBadge from "../../components/TeamBadge";
 
-/**
- * STATUS LABELS
- */
+/* ================================ Constantes ================================ */
+
 const STATUS_LABELS = {
   scheduled: "Agendado",
   ongoing: "Em andamento",
@@ -13,9 +12,6 @@ const STATUS_LABELS = {
   finished: "Encerrado",
 };
 
-/**
- * ORDEM DE PRIORIDADE DOS STATUS (para ordenação visual)
- */
 const STATUS_ORDER = {
   ongoing: 1,
   paused: 2,
@@ -23,70 +19,61 @@ const STATUS_ORDER = {
   finished: 4,
 };
 
-// Storage
 const LOGO_BUCKET = "team-logos";
 
-// Funções auxiliares para logo
-function isHttpUrl(str) {
-  return typeof str === "string" && /^https?:\/\//i.test(str);
-}
-function isStoragePath(str) {
-  return typeof str === "string" && !isHttpUrl(str) && str.trim() !== "";
-}
-function publicLogoUrl(raw) {
+/* ================================ Helpers ================================ */
+
+const isHttpUrl = (str) => typeof str === "string" && /^https?:\/\//i.test(str);
+const isStoragePath = (str) => typeof str === "string" && !isHttpUrl(str) && str.trim() !== "";
+const publicLogoUrl = (raw) => {
   if (!raw) return null;
-  if (isHttpUrl(raw)) return raw; // já é pública
+  if (isHttpUrl(raw)) return raw;
   if (isStoragePath(raw)) {
     const { data } = supabase.storage.from(LOGO_BUCKET).getPublicUrl(raw);
     return data?.publicUrl || null;
   }
   return null;
-}
+};
 
-// Formatar tempo em minutos:segundos baseado no tempo decorrido
+// Normaliza string para comparação (remove acentos, lower)
+const norm = (s = "") =>
+  s
+    .toString()
+    .trim()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase();
+
+// Tempo decorrido (min:seg)
 function formatGameTime(match, currentTimestamp) {
-  if (!match || match.status === "scheduled" || match.status === "finished") {
-    return "0:00";
-  }
-
-  const startTime = new Date(match.starts_at);
-  const currentTime =
-    match.status === "paused"
-      ? new Date(match.updated_at)
-      : new Date(currentTimestamp || Date.now());
-
+  if (!match || match.status === "scheduled" || match.status === "finished") return "0:00";
+  const startTime = match.starts_at ? new Date(match.starts_at) : new Date();
+  const currentTime = match.status === "paused" ? new Date(match.updated_at) : new Date(currentTimestamp || Date.now());
   const diffMs = currentTime - startTime;
-  if (diffMs < 0) return "0:00";
-
+  if (!Number.isFinite(diffMs) || diffMs < 0) return "0:00";
   const totalSeconds = Math.floor(diffMs / 1000);
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
-
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
 // Barra animada para jogos ao vivo/pausados
 function LiveProgressBar({ status }) {
   if (status !== "ongoing" && status !== "paused") return null;
-
   const isOngoing = status === "ongoing";
   const barColor = isOngoing ? "bg-blue-500" : "bg-orange-500";
   const bgColor = isOngoing ? "bg-blue-100" : "bg-orange-100";
-
   return (
     <div className={`absolute top-0 left-0 right-0 h-1 ${bgColor} overflow-hidden rounded-t-lg`}>
       <div
         className={`h-full ${barColor}`}
-        style={{
-          animation: isOngoing ? "slideProgress 3s ease-in-out infinite" : "none",
-          width: "100%",
-        }}
+        style={{ animation: isOngoing ? "slideProgress 3s ease-in-out infinite" : "none", width: "100%" }}
       />
     </div>
   );
 }
 
-// ---------- helpers de ordem / elegibilidade ----------
+// Ordem dentro da fila
 const orderValue = (m) =>
   Number.isFinite(Number(m?.order_idx))
     ? Number(m.order_idx)
@@ -94,56 +81,47 @@ const orderValue = (m) =>
     ? Number(m.round)
     : Number(m?.id ?? Number.MAX_SAFE_INTEGER);
 
-const isEligibleToStart = (m) => {
-  if (m.status !== "scheduled") return false;
-  // Grupos: pode iniciar mesmo sem times definidos (em geral já tem)
-  if (m.group_name) return true;
-  // Mata-mata: só quando os dois times estiverem definidos
-  return Boolean(m.home?.id && m.away?.id);
-};
+// Nunca iniciar sem times (grupos e mata-mata)
+const isEligibleToStart = (m) => m.status === "scheduled" && Boolean(m.home?.id && m.away?.id);
+
+/* ================================ Página ================================ */
 
 export default function Matches() {
   const [matches, setMatches] = useState([]);
-  const [sports, setSports] = useState([]);
-  const [selectedSport, setSelectedSport] = useState(null);
+  const [sports, setSports] = useState([]); // [{ key: "futsal", name: "Futsal" }, ...]
+  const [selectedSport, setSelectedSport] = useState(null); // guarda a CHAVE (nome normalizado)
   const [selectedStatus, setSelectedStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState({});
   const [isAdmin, setIsAdmin] = useState(null);
   const [lastError, setLastError] = useState(null);
   const [currentTimestamp, setCurrentTimestamp] = useState(Date.now());
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [isOnline, setIsOnline] = useState(typeof navigator !== "undefined" ? navigator.onLine : true);
 
   const channelRef = useRef(null);
   const mountedRef = useRef(true);
   const timerRef = useRef(null);
 
-  // mantém mensagens de erro visíveis por 8s
+  // Mensagens de erro com timeout
   useEffect(() => {
     if (!lastError) return;
     const t = setTimeout(() => setLastError(null), 8000);
     return () => clearTimeout(t);
   }, [lastError]);
 
-  // Detectar conectividade
+  // Online/offline
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
-
     window.addEventListener("online", handleOnline);
     window.addEventListener("offline", handleOffline);
-
     return () => {
       window.removeEventListener("online", handleOnline);
       window.removeEventListener("offline", handleOffline);
     };
   }, []);
 
-  const setMatchBusy = (id, v) =>
-    setBusy((prev) => ({
-      ...prev,
-      [id]: v,
-    }));
+  const setMatchBusy = (id, v) => setBusy((prev) => ({ ...prev, [id]: v }));
 
   const ensureSession = async () => {
     const { data, error } = await supabase.auth.getSession();
@@ -167,18 +145,20 @@ export default function Matches() {
     }
   };
 
+  // ⚠️ Carrega a lista de esportes para o filtro (usa NOME, não ID)
   const loadSports = async () => {
-    const { data, error } = await supabase.from("sports").select("id,name").order("name");
+    const { data, error } = await supabase.from("sports").select("name").order("name");
     if (error) {
       console.error("loadSports error:", error);
       return;
     }
-    if (data) setSports(data);
+    const unique = Array.from(new Set((data || []).map((r) => r.name).filter(Boolean)));
+    setSports(unique.map((name) => ({ key: norm(name), name })));
   };
 
+  // Carrega partidas (sem filtrar por esporte no servidor para evitar mismatch de tipos)
   const loadMatches = async () => {
     if (!mountedRef.current) return;
-
     setLoading(true);
     try {
       let query = supabase
@@ -187,17 +167,18 @@ export default function Matches() {
           `
           id, stage, round, group_name, order_idx, starts_at, venue, created_at, updated_at,
           status, home_score, away_score, meta,
+          sport_id,
           home_team_id, away_team_id,
-          sport:sport_id ( id, name ),
+          sport:sport_id ( name ),
           home:home_team_id ( id, name, logo_url, color ),
           away:away_team_id ( id, name, logo_url, color )
         `
         );
 
-      if (selectedSport) query = query.eq("sport_id", selectedSport);
+      // Filtra status no servidor (é string, compatível)
       if (selectedStatus) query = query.eq("status", selectedStatus);
 
-      // esconde slots vazios de mata-mata
+      // Esconde slots vazios de mata-mata
       query = query.or("group_name.not.is.null,and(home_team_id.not.is.null,away_team_id.not.is.null)");
 
       const { data, error } = await query;
@@ -205,8 +186,8 @@ export default function Matches() {
         console.error("loadMatches error:", error);
         if (mountedRef.current) setLastError(error.message || "Falha ao carregar partidas.");
       } else {
-        // Normaliza os logos das partidas
-        const normalized = (data || []).map((m) => {
+        // Normaliza logos
+        let normalized = (data || []).map((m) => {
           const home =
             m.home && typeof m.home === "object"
               ? {
@@ -229,57 +210,52 @@ export default function Matches() {
                 }
               : m.away;
 
-          return { ...m, home, away };
+          // Guarda também chave normalizada do esporte (para filtro no cliente)
+          const sportName = m?.sport?.name || "";
+          return { ...m, home, away, _sportKey: norm(sportName) };
         });
 
-        // Ordena por status (ao vivo > pausado > agendado > encerrado), depois por ordem da fila
+        // Filtro por modalidade (cliente) usando nome normalizado
+        if (selectedSport) {
+          normalized = normalized.filter((m) => m._sportKey === selectedSport);
+        }
+
+        // Ordena por status e ordem de execução
         const sortedData = normalized.sort((a, b) => {
           const aOrder = STATUS_ORDER[a.status] || 999;
           const bOrder = STATUS_ORDER[b.status] || 999;
           if (aOrder !== bOrder) return aOrder - bOrder;
-
-          // mesma categoria -> ordem de execução
           return orderValue(a) - orderValue(b);
         });
 
-        if (mountedRef.current) {
-          setMatches(sortedData);
-        }
+        if (mountedRef.current) setMatches(sortedData);
       }
     } finally {
-      if (mountedRef.current) {
-        setLoading(false);
-      }
+      if (mountedRef.current) setLoading(false);
     }
   };
 
-  // Inicialização principal - executa apenas uma vez
+  // Init
   useEffect(() => {
     mountedRef.current = true;
-
     const initialize = async () => {
       await ensureSession();
       await checkIsAdmin();
       await loadSports();
       await loadMatches();
     };
-
     initialize();
 
-    // Timer para atualizar o timestamp a cada segundo
+    // Relógio do jogo
     timerRef.current = setInterval(() => {
-      if (mountedRef.current) {
-        setCurrentTimestamp(Date.now());
-      }
+      if (mountedRef.current) setCurrentTimestamp(Date.now());
     }, 1000);
 
-    // Listener para mudanças de auth
+    // Auth listener
     const { data: sub } = supabase.auth.onAuthStateChange(async (_event, session) => {
       if (!mountedRef.current) return;
-
       setIsAdmin(null);
       await checkIsAdmin();
-
       if (session) {
         await loadSports();
         await loadMatches();
@@ -297,31 +273,27 @@ export default function Matches() {
         channelRef.current = null;
       }
     };
-  }, []); // Array vazio - executa apenas uma vez
+  }, []);
 
-  // Effect separado para recarregar quando filtros mudarem
+  // Recarrega ao mudar filtros e assina realtime
   useEffect(() => {
     if (!mountedRef.current) return;
-
     loadMatches();
 
-    // Setup realtime
+    // Realtime
     if (channelRef.current) {
       supabase.removeChannel(channelRef.current);
       channelRef.current = null;
     }
-
     const channel = supabase
       .channel("admin-matches")
       .on("postgres_changes", { event: "*", schema: "public", table: "matches" }, () => {
+        // pequeno debounce para lotes
         setTimeout(() => {
-          if (mountedRef.current) {
-            loadMatches();
-          }
+          if (mountedRef.current) loadMatches();
         }, 200);
       })
       .subscribe();
-
     channelRef.current = channel;
 
     return () => {
@@ -330,58 +302,53 @@ export default function Matches() {
         channelRef.current = null;
       }
     };
-  }, [selectedSport, selectedStatus]); // Só depende dos filtros
+  }, [selectedSport, selectedStatus]);
 
   // ---------- cálculo dos jogos liberados para iniciar ----------
-  // Regra: por modalidade (sport_id), se houver jogo ongoing/paused, NENHUM pode iniciar.
-  // Do contrário, somente o scheduled elegível com menor ordem pode iniciar.
+  // Por modalidade (sport_id numérico), se houver ongoing/paused, ninguém inicia.
+  // Caso contrário, só o scheduled elegível com menor ordem.
   const allowedStartIds = useMemo(() => {
     const mapBySport = new Map();
     for (const m of matches) {
-      const sid = m?.sport?.id ?? m.sport_id ?? "unknown";
-      if (!mapBySport.has(sid)) mapBySport.set(sid, []);
-      mapBySport.get(sid).push(m);
+      const key = m?.sport_id ? String(m.sport_id) : "unknown";
+      if (!mapBySport.has(key)) mapBySport.set(key, []);
+      mapBySport.get(key).push(m);
     }
 
     const allowed = new Set();
-
-    for (const [sid, arr] of mapBySport.entries()) {
+    for (const [key, arr] of mapBySport.entries()) {
+      if (key === "unknown") continue; // Sem sport_id => não libera
       const hasActive = arr.some((x) => x.status === "ongoing" || x.status === "paused");
-      if (hasActive) continue; // bloqueia todo mundo enquanto houver partida ativa
-
+      if (hasActive) continue;
       const eligible = arr.filter(isEligibleToStart);
       if (!eligible.length) continue;
-
       eligible.sort((a, b) => orderValue(a) - orderValue(b));
-      allowed.add(eligible[0].id); // só o próximo
+      allowed.add(eligible[0].id);
     }
     return allowed;
   }, [matches]);
+
+  /* ================================ Mutations ================================ */
 
   const mutate = async (id, patch) => {
     setMatchBusy(id, true);
     setLastError(null);
 
-    // 🔵 1) UI OTIMISTA
+    // UI otimista
     const prev = matches;
     setMatches((cur) => cur.map((m) => (m.id === id ? { ...m, ...patch } : m)));
 
     try {
-      const { error } = await supabase
-        .from("matches")
-        .update(patch)
-        .eq("id", id);
-
+      const { error } = await supabase.from("matches").update(patch).eq("id", id);
       if (error) throw new Error(`Falha ao atualizar: ${error.message}`);
 
-      // 🟢 2) Fallback: se por algum motivo o realtime não vier, garantimos um refresh rápido
+      // Caso o realtime não venha
       setTimeout(() => {
         if (mountedRef.current) loadMatches();
       }, 600);
 
       return true;
     } catch (e) {
-      // 🔴 Reverte UI otimista em caso de erro
       setMatches(prev);
       setLastError(e.message || "Erro ao atualizar partida.");
       return false;
@@ -390,19 +357,14 @@ export default function Matches() {
     }
   };
 
-
   const changePoints = async (m, team, action) => {
     if (m.status === "scheduled") return;
-
     const key = `${team}_score`;
     let next = Math.max(0, Number(m[key] || 0));
-
     if (action === "inc") next += 1;
     if (action === "dec") next = Math.max(0, next - 1);
     if (action === "reset") next = 0;
-
-    const patch = { [key]: next };
-    await mutate(m.id, patch);
+    await mutate(m.id, { [key]: next });
   };
 
   const getSets = (m, side) => {
@@ -413,35 +375,29 @@ export default function Matches() {
 
   const changeSets = async (m, team, action) => {
     if (m.status === "scheduled") return;
-
     const meta = m.meta || {};
     const key = team === "home" ? "home_sets" : "away_sets";
     let value = Math.max(0, Number(meta[key] || 0));
     if (action === "inc") value += 1;
     if (action === "dec") value = Math.max(0, value - 1);
     if (action === "reset") value = 0;
-
     await mutate(m.id, { meta: { ...meta, [key]: value } });
   };
 
   const applyStatusChange = async (m, newStatus) => {
     const now = new Date().toISOString();
-    const patch = {
-      status: newStatus,
-      updated_at: now,         // 🔧 força atualização visual e evento realtime
-    };
-    if (newStatus === "ongoing" && m.status === "scheduled" && !m.starts_at) {
-      patch.starts_at = now;   // garante relógio do jogo
-    }
+    const patch = { status: newStatus, updated_at: now };
+    if (newStatus === "ongoing" && m.status === "scheduled" && !m.starts_at) patch.starts_at = now;
     return await mutate(m.id, patch);
   };
 
   // ---------- guarda de fila no clique ----------
   const tryStartMatch = async (m) => {
     setLastError(null);
-    const sid = m?.sport?.id ?? m.sport_id;
+
+    const sid = m?.sport_id ? String(m.sport_id) : null;
     if (!sid) {
-      setLastError("Partida sem modalidade definida.");
+      setLastError("Partida sem modalidade válida (sport_id ausente).");
       return;
     }
 
@@ -449,7 +405,7 @@ export default function Matches() {
       // Revalida no servidor (evita corrida)
       const { data: sameSport, error } = await supabase
         .from("matches")
-        .select("id,status,group_name,order_idx,round,home_team_id,away_team_id")
+        .select("id,status,group_name,order_idx,round,home_team_id,away_team_id,sport_id")
         .eq("sport_id", sid);
 
       if (error) throw error;
@@ -458,17 +414,11 @@ export default function Matches() {
       const active = sameSport.some((x) => x.status === "ongoing" || x.status === "paused");
       if (active) throw new Error("Já existe uma partida em andamento/pausada nesta modalidade. Encerre-a antes de iniciar outra.");
 
-      const eligible = sameSport.filter((x) => {
-        if (x.status !== "scheduled") return false;
-        if (x.group_name) return true;
-        return Boolean(x.home_team_id && x.away_team_id);
-      });
-
+      const eligible = sameSport.filter((x) => x.status === "scheduled" && Boolean(x.home_team_id && x.away_team_id));
       if (!eligible.length) throw new Error("Não há partidas elegíveis para iniciar.");
 
       eligible.sort((a, b) => orderValue(a) - orderValue(b));
       const nextId = eligible[0].id;
-
       if (nextId !== m.id) throw new Error("Você só pode iniciar o próximo jogo da fila.");
 
       await applyStatusChange(m, "ongoing");
@@ -478,22 +428,12 @@ export default function Matches() {
     }
   };
 
-  const startMatch = async (m) => {
-    // passa pelo guard de fila (não chama applyStatusChange direto)
-    await tryStartMatch(m);
-  };
+  const startMatch = async (m) => await tryStartMatch(m);
+  const pauseMatch = async (m) => await applyStatusChange(m, "paused");
+  const resumeMatch = async (m) => await applyStatusChange(m, "ongoing");
+  const finishMatch = async (m) => await applyStatusChange(m, "finished");
 
-  const pauseMatch = async (m) => {
-    await applyStatusChange(m, "paused");
-  };
-
-  const resumeMatch = async (m) => {
-    await applyStatusChange(m, "ongoing");
-  };
-
-  const finishMatch = async (m) => {
-    await applyStatusChange(m, "finished");
-  };
+  /* ================================ Render ================================ */
 
   return (
     <div className="space-y-6">
@@ -538,10 +478,10 @@ export default function Matches() {
             </button>
             {sports.map((s) => (
               <button
-                key={s.id}
-                onClick={() => setSelectedSport(s.id)}
+                key={s.key}
+                onClick={() => setSelectedSport(s.key)}
                 className={`px-2 py-1 rounded text-xs ${
-                  selectedSport === s.id ? "bg-blue-600 text-white" : "bg-gray-100 hover:bg-gray-200"
+                  selectedSport === s.key ? "bg-blue-600 text-white" : "bg-gray-100 hover:bg-gray-200"
                 }`}
               >
                 {s.name}
@@ -588,13 +528,14 @@ export default function Matches() {
       ) : (
         <ul className="space-y-4">
           {matches.map((m) => {
-            const isVolei = (m?.sport?.name || "").toLowerCase() === "volei";
+            const sportNameNorm = norm(m?.sport?.name || "");
+            const isVolei = sportNameNorm === "volei" || sportNameNorm === "volei " || sportNameNorm === "voleibol";
             const homeSets = isVolei ? getSets(m, "home") : 0;
             const awaySets = isVolei ? getSets(m, "away") : 0;
 
             const isKnockout = !m.group_name;
             const hasBothTeams = Boolean(m.home?.id && m.away?.id);
-            const canStartByTeams = isKnockout ? hasBothTeams : true;
+            const canStartByTeams = isKnockout ? hasBothTeams : hasBothTeams; // sempre precisar de times definidos
 
             const isLive = m.status === "ongoing" || m.status === "paused";
             const cardBorder = isLive ? (m.status === "ongoing" ? "border-blue-200" : "border-orange-200") : "border-gray-200";
@@ -679,12 +620,12 @@ export default function Matches() {
                   {m.status === "scheduled" && (
                     <button
                       onClick={() => startMatch(m)}
-                      disabled={busy[m.id] || !canStartByTeams || !allowedStartIds.has(m.id)}
+                      disabled={busy[m.id] || !canStartByTeams || !isNextInQueue}
                       className="px-3 py-1 text-xs rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-50"
                       title={
                         !canStartByTeams
-                          ? "Defina as duas equipes antes de iniciar (mata-mata)."
-                          : allowedStartIds.has(m.id)
+                          ? "Defina as duas equipes antes de iniciar."
+                          : isNextInQueue
                           ? "Iniciar próximo jogo da ordem."
                           : "Aguarde: apenas o próximo jogo da ordem pode iniciar."
                       }
@@ -729,9 +670,7 @@ export default function Matches() {
                     </>
                   )}
                   {m.status === "finished" && (
-                    <span className="text-xs text-gray-500 self-center">
-                      Partida encerrada (resultado editável).
-                    </span>
+                    <span className="text-xs text-gray-500 self-center">Partida encerrada (resultado editável).</span>
                   )}
                 </div>
               </li>
@@ -757,7 +696,7 @@ export default function Matches() {
   );
 }
 
-/* Subcomponentes */
+/* ================================ Subcomponentes ================================ */
 
 function TeamDisplay({
   team,
@@ -773,7 +712,6 @@ function TeamDisplay({
   align = "left",
 }) {
   const right = align === "right";
-
   return (
     <div className={`border rounded p-3 space-y-3 ${right ? "" : ""}`}>
       {/* Nome do time */}
@@ -782,7 +720,7 @@ function TeamDisplay({
         <span className="text-sm font-medium truncate">{team?.name || "A definir"}</span>
       </div>
 
-      {/* Sets para vôlei */}
+      {/* Sets (vôlei) */}
       {typeof sets === "number" && (
         <div className="space-y-2">
           <div className="flex items-center justify-between">
@@ -790,20 +728,8 @@ function TeamDisplay({
             <span className="font-semibold text-sm tabular-nums">{sets}</span>
           </div>
           <div className="flex items-center gap-1">
-            <button
-              onClick={onSetDec}
-              disabled={disabled}
-              className="flex-1 px-2 py-1 text-xs border rounded hover:bg-gray-100 disabled:opacity-50"
-            >
-              -
-            </button>
-            <button
-              onClick={onSetInc}
-              disabled={disabled}
-              className="flex-1 px-2 py-1 text-xs border rounded hover:bg-gray-100 disabled:opacity-50"
-            >
-              +
-            </button>
+            <button onClick={onSetDec} disabled={disabled} className="flex-1 px-2 py-1 text-xs border rounded hover:bg-gray-100 disabled:opacity-50">-</button>
+            <button onClick={onSetInc} disabled={disabled} className="flex-1 px-2 py-1 text-xs border rounded hover:bg-gray-100 disabled:opacity-50">+</button>
             <button
               onClick={onSetReset}
               disabled={disabled}
@@ -823,20 +749,8 @@ function TeamDisplay({
           <span className="font-bold text-lg tabular-nums">{Number(score || 0)}</span>
         </div>
         <div className="flex items-center gap-1">
-          <button
-            onClick={onDec}
-            disabled={disabled}
-            className="flex-1 px-2 py-1 text-xs border rounded hover:bg-gray-100 disabled:opacity-50"
-          >
-            -
-          </button>
-          <button
-            onClick={onInc}
-            disabled={disabled}
-            className="flex-1 px-2 py-1 text-xs border rounded hover:bg-gray-100 disabled:opacity-50"
-          >
-            +
-          </button>
+          <button onClick={onDec} disabled={disabled} className="flex-1 px-2 py-1 text-xs border rounded hover:bg-gray-100 disabled:opacity-50">-</button>
+          <button onClick={onInc} disabled={disabled} className="flex-1 px-2 py-1 text-xs border rounded hover:bg-gray-100 disabled:opacity-50">+</button>
           <button
             onClick={onReset}
             disabled={disabled}

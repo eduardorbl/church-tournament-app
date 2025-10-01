@@ -628,8 +628,8 @@ export default function MatchPage() {
 
       {/* Elencos lado a lado */}
       <div className="grid md:grid-cols-2 gap-4">
-        <RosterCard title={`Elenco — ${home?.name || "A definir"}`} players={homePlayers} />
-        <RosterCard title={`Elenco — ${away?.name || "A definir"}`} players={awayPlayers} />
+        <RosterCard title={`Convocação — ${home?.name || "A definir"}`} players={homePlayers} />
+        <RosterCard title={`Convocação — ${away?.name || "A definir"}`} players={awayPlayers} />
       </div>
 
       {/* Rodapé curto */}

@@ -367,7 +367,6 @@ export default function FIFA() {
         </div>
         <p className="text-sm text-gray-600">
           Hub informativo: <strong>chaveamento</strong> completo (com placeholders) → <strong>jogos agendados</strong> → <strong>regulamento</strong>.
-          Não há indicadores de “ao vivo/pausado” nesta página.
         </p>
       </header>
 

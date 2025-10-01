@@ -182,6 +182,53 @@ export default function Home() {
             details = Object.fromEntries(normalized.map((d) => [d.id, d]));
           }
 
+          // --- Fallback: se o slot "live" não veio, tenta pegar jogo ongoing/paused e simular ---
+          if (!bySlot?.live?.match_id) {
+            const { data: liveCandidates, error: liveErr } = await supabase
+              .from("matches")
+              .select(`
+                id, order_idx, stage, group_name, status, starts_at, updated_at, venue, meta,
+                home_score, away_score,
+                home:home_team_id ( id, name, logo_url, color ),
+                away:away_team_id ( id, name, logo_url, color ),
+                sport:sport_id ( id, name )
+              `)
+              .eq("sport_id", sp.sportId)
+              .in("status", ["ongoing","paused"])
+              .limit(6);
+
+            if (!liveErr && liveCandidates?.length) {
+              // prioriza ongoing > paused; depois, mais recentemente atualizado
+              const pick = liveCandidates
+                .slice()
+                .sort((a, b) => {
+                  const pr = (s) => (s === "ongoing" ? 1 : s === "paused" ? 2 : 9);
+                  const d = pr(a.status) - pr(b.status);
+                  if (d !== 0) return d;
+                  return new Date(b.updated_at || b.starts_at || 0) - new Date(a.updated_at || a.starts_at || 0);
+                })[0];
+
+              // normaliza logos exatamente como acima
+              const normHome = pick.home && typeof pick.home === "object"
+                ? { ...pick.home, logo_url: normalizeLogo(pick.home.logo_url) }
+                : pick.home;
+              const normAway = pick.away && typeof pick.away === "object"
+                ? { ...pick.away, logo_url: normalizeLogo(pick.away.logo_url) }
+                : pick.away;
+              const normalizedPick = { ...pick, home: normHome, away: normAway };
+
+              // injeta nos detalhes e simula o slot "live"
+              details[normalizedPick.id] = normalizedPick;
+              bySlot.live = {
+                slot: "live",
+                match_id: normalizedPick.id,
+                order_idx: normalizedPick.order_idx,
+                stage: normalizedPick.stage,
+                group_name: normalizedPick.group_name,
+              };
+            }
+          }
+
           // 3) Lista compacta extra de agendados (com times) – os 6 próximos
           const ignoreIds = [bySlot.call?.match_id, bySlot.next?.match_id].filter(Boolean);
           const { data: upcoming } = await supabase
@@ -326,7 +373,7 @@ function SportBlock({ block, now }) {
               <PlayCircle className="h-4 w-4" />
               {live ? (
                 <Link to={`/match/${live.id}`} className="hover:underline">
-                  Ao vivo — Jogo {live.order_idx}
+                  {live.status === "paused" ? "Pausado" : "Ao vivo"} — Jogo {live.order_idx}
                   {live.group_name ? ` • Grupo ${live.group_name}` : ""}
                 </Link>
               ) : (

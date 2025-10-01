@@ -1,7 +1,18 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
-import { supabase } from '../supabaseClient';
+// src/auth/AuthProvider.jsx
+import React, { createContext, useContext, useEffect, useRef, useState } from "react";
+import { supabase } from "../supabaseClient";
 
-const AuthContext = createContext({});
+const AuthContext = createContext({
+  session: null,
+  isAdmin: false,
+  needsPasswordSetup: false,
+  ready: false,
+  loading: false,
+  signIn: async () => ({ data: null, error: null }),
+  signOut: async () => ({ error: null }),
+  updatePassword: async () => ({ data: null, error: null }),
+  refreshAuth: async () => {},
+});
 
 export function useAuth() {
   return useContext(AuthContext);
@@ -12,103 +23,133 @@ export function AuthProvider({ children }) {
   const [isAdmin, setIsAdmin] = useState(false);
   const [needsPasswordSetup, setNeedsPasswordSetup] = useState(false);
   const [ready, setReady] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  const mountedRef = useRef(true);
+  const lastCheckId = useRef(0);
 
   useEffect(() => {
-    let mounted = true;
+    mountedRef.current = true;
 
-    // Função SUPER simplificada para inicializar auth
-    const initAuth = async () => {
+    (async () => {
       try {
-        const { data: { session: initialSession } } = await supabase.auth.getSession();
-        
-        if (!mounted) return;
-        
-        setSession(initialSession);
-        
-        // Se tem sessão, verificar admin de forma simples
-        if (initialSession?.user?.id) {
-          try {
-            const { data: adminData } = await supabase.rpc('is_admin');
-            if (mounted) {
-              setIsAdmin(Boolean(adminData));
-              setNeedsPasswordSetup(false); // Simplificando - sempre false após login
-            }
-          } catch (error) {
-            console.error('Error checking admin:', error);
-            if (mounted) {
-              setIsAdmin(false);
-              setNeedsPasswordSetup(false);
-            }
-          }
+        setLoading(true);
+
+        // 1) Pega a sessão atual
+        const { data, error } = await supabase.auth.getSession();
+        if (error) throw error;
+
+        const initial = data?.session ?? null;
+        if (!mountedRef.current) return;
+
+        // 2) Aplica sessão e LIBERA a UI imediatamente
+        setSession(initial);
+        setReady(true);
+        setLoading(false);
+
+        // 3) Checa admin/flags de forma assíncrona (não bloqueia a UI)
+        if (initial?.user?.id) {
+          void checkAdminAndFlags(initial);
         } else {
-          if (mounted) {
-            setIsAdmin(false);
-            setNeedsPasswordSetup(false);
-          }
-        }
-
-        if (mounted) {
-          setReady(true);
-        }
-      } catch (error) {
-        console.error('Error initializing auth:', error);
-        if (mounted) {
-          setSession(null);
           setIsAdmin(false);
           setNeedsPasswordSetup(false);
-          setReady(true);
         }
+      } catch (e) {
+        console.error("Auth init error:", e);
+        if (!mountedRef.current) return;
+        setSession(null);
+        setIsAdmin(false);
+        setNeedsPasswordSetup(false);
+        setReady(true);
+        setLoading(false);
       }
-    };
+    })();
 
-    // Executar inicialização apenas uma vez
-    initAuth();
+    // Reage a QUALQUER mudança de auth
+    const { data: subscriptionWrapper } = supabase.auth.onAuthStateChange(
+      async (_event, newSession) => {
+        if (!mountedRef.current) return;
+        setSession(newSession ?? null);
 
-    // Listener MUITO simplificado - apenas para logout
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (event, newSession) => {
-        if (!mounted) return;
-        
-        console.log('Auth change:', event);
-        
-        // Apenas atualiza sessão e reseta estados
-        setSession(newSession);
-        
-        if (!newSession) {
-          // Logout - limpa tudo
+        // não trava a UI; checa admin/flags em paralelo
+        if (newSession?.user?.id) {
+          void checkAdminAndFlags(newSession);
+        } else {
           setIsAdmin(false);
           setNeedsPasswordSetup(false);
         }
-        // Para login, mantém os estados atuais para evitar loops
       }
     );
 
     return () => {
-      mounted = false;
-      subscription?.unsubscribe();
+      mountedRef.current = false;
+      subscriptionWrapper?.subscription?.unsubscribe?.();
     };
-  }, []); // Array vazio - executa apenas UMA vez
+  }, []);
 
-  // Funções simplificadas
-  const signIn = async (email, password) => {
-    const result = await supabase.auth.signInWithPassword({ email, password });
-    
-    // Após login bem-sucedido, atualiza admin status
-    if (result.data?.session?.user?.id && !result.error) {
-      try {
-        const { data: adminData } = await supabase.rpc('is_admin');
-        setIsAdmin(Boolean(adminData));
-        setNeedsPasswordSetup(false);
-      } catch (error) {
-        console.error('Error checking admin after login:', error);
+  // Checagem resiliente de admin/flags (não lança erro na UI)
+  const checkAdminAndFlags = async (sess) => {
+    const checkId = ++lastCheckId.current;
+
+    try {
+      const userId = sess?.user?.id;
+      if (!userId) {
+        if (mountedRef.current && checkId === lastCheckId.current) {
+          setIsAdmin(false);
+          setNeedsPasswordSetup(false);
+        }
+        return;
+      }
+
+      // Roda em paralelo; se uma falhar, seguimos com a outra
+      const [adminRes, profileRes] = await Promise.allSettled([
+        supabase.rpc("is_admin"),
+        supabase
+          .from("user_profiles")
+          .select("needs_password_setup")
+          .eq("user_id", userId)
+          .maybeSingle(),
+      ]);
+
+      let admin = false;
+      if (adminRes.status === "fulfilled") {
+        admin = Boolean(adminRes.value?.data);
+      } else {
+        console.warn("is_admin RPC falhou:", adminRes.reason);
+      }
+
+      let nps = false;
+      if (profileRes.status === "fulfilled") {
+        nps = Boolean(profileRes.value?.data?.needs_password_setup);
+      } else {
+        // se sua tabela/coluna não existir ou RLS bloquear, apenas loga
+        console.warn("Leitura de user_profiles falhou (ignorado):", profileRes.reason);
+      }
+
+      if (mountedRef.current && checkId === lastCheckId.current) {
+        setIsAdmin(admin);
+        setNeedsPasswordSetup(nps);
+      }
+    } catch (e) {
+      console.error("checkAdminAndFlags error:", e);
+      if (mountedRef.current && checkId === lastCheckId.current) {
         setIsAdmin(false);
         setNeedsPasswordSetup(false);
       }
     }
-    
+  };
+
+  // Login: atualiza sessão e checa admin/flags em seguida (sem bloquear UI)
+  const signIn = async (email, password) => {
+    const result = await supabase.auth.signInWithPassword({ email, password });
+    if (result.data?.session?.user?.id && !result.error) {
+      setSession(result.data.session);
+      void checkAdminAndFlags(result.data.session);
+    }
     return result;
   };
 
+  // Logout
   const signOut = async () => {
     const { error } = await supabase.auth.signOut();
     if (!error) {
@@ -119,24 +160,35 @@ export function AuthProvider({ children }) {
     return { error };
   };
 
+  // Atualizar senha e marcar flag no perfil (se existir a tabela/coluna)
   const updatePassword = async (newPassword) => {
     const { data, error } = await supabase.auth.updateUser({ password: newPassword });
-    
-    if (!error && session?.user) {
+
+    if (!error && session?.user?.id) {
       try {
         await supabase
-          .from('user_profiles')
-          .upsert({
-            user_id: session.user.id,
-            needs_password_setup: false
-          });
+          .from("user_profiles")
+          .upsert({ user_id: session.user.id, needs_password_setup: false });
         setNeedsPasswordSetup(false);
       } catch (err) {
-        console.error('Error updating profile:', err);
+        console.warn("updatePassword: upsert user_profiles falhou (ignorado):", err);
       }
     }
 
     return { data, error };
+  };
+
+  // Forçar rechecagem manual (se precisar em algum fluxo)
+  const refreshAuth = async () => {
+    const { data } = await supabase.auth.getSession();
+    const s = data?.session ?? null;
+    setSession(s);
+    if (s?.user?.id) {
+      void checkAdminAndFlags(s);
+    } else {
+      setIsAdmin(false);
+      setNeedsPasswordSetup(false);
+    }
   };
 
   const value = {
@@ -144,15 +196,12 @@ export function AuthProvider({ children }) {
     isAdmin,
     needsPasswordSetup,
     ready,
-    loading: false, // Sempre false para simplicidade
+    loading,
     signIn,
     signOut,
     updatePassword,
+    refreshAuth,
   };
 
-  return (
-    <AuthContext.Provider value={value}>
-      {children}
-    </AuthContext.Provider>
-  );
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
