@@ -275,7 +275,7 @@ function StandingsTable({ standings, teamsById }) {
                 <th className="w-10 py-1 text-center">SV</th>
                 <th className="w-10 py-1 text-center">SP</th>
                 <th className="w-10 py-1 text-center">PF</th>
-                <th className="w-10 py-1 text-center">PA</th>
+                <th className="w-10 py-1 text-center">PC</th>
                 <th className="w-12 py-1 text-center">+/-</th>
                 <th className="w-12 py-1 text-center">Pts</th>
               </tr>
@@ -308,7 +308,7 @@ function StandingsTable({ standings, teamsById }) {
             </tbody>
           </table>
           <div className="px-3 py-2 text-[10px] text-gray-500">
-            Critérios: <strong>Pontos (3 por vitória)</strong>, depois <strong>SV</strong>, <strong>SP</strong> (menor é melhor), <strong>saldo de pontos</strong> e <strong>PF</strong>.
+            Critérios/colunas: <strong>#</strong> (posição), <strong>Time</strong>, <strong>P</strong> (jogos), <strong>V</strong> (vitórias), <strong>D</strong> (derrotas), <strong>SV</strong> (sets vencidos), <strong>SP</strong> (sets perdidos), <strong>PF</strong> (pontos feitos), <strong>PC</strong> (pontos contra), <strong>+/-</strong> (saldo de pontos), <strong>Pts</strong> (pontos na tabela).
           </div>
         </div>
       ))}

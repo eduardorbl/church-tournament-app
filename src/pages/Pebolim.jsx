@@ -169,6 +169,8 @@ function ListMatchCard({ match }) {
 function BracketMatchCard({ match, placeholder }) {
   const home = match?.home || (placeholder?.home ? { name: placeholder.home } : null);
   const away = match?.away || (placeholder?.away ? { name: placeholder.away } : null);
+  const homeName = home?.name || (placeholder?.home ?? "A definir");
+  const awayName = away?.name || (placeholder?.away ?? "A definir");
   const showScore = match && match.status !== "scheduled";
   const homeScore = Number(match?.home_score ?? 0);
   const awayScore = Number(match?.away_score ?? 0);
@@ -178,11 +180,11 @@ function BracketMatchCard({ match, placeholder }) {
       <TitleLine order_idx={match?.order_idx} stage={match?.stage} />
       <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
         <div className="min-w-0 justify-self-start">
-          <TeamChip team={home} />
+          <TeamChip team={home?.id ? home : { name: homeName }} />
         </div>
         <div className="justify-self-center text-xs text-gray-400">x</div>
         <div className="min-w-0 justify-self-end">
-          <TeamChip team={away} align="right" />
+          <TeamChip team={away?.id ? away : { name: awayName }} align="right" />
         </div>
       </div>
       <div className="mt-1 flex items-center justify-between text-[11px] text-gray-500">

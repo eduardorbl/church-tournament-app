@@ -3,7 +3,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../supabaseClient";
 import { useNavigate } from "react-router-dom";
 
-const MATCH_COUNT = 16; // 32 times → 16 jogos de oitavas
+const MATCH_COUNT = 16; // 32 times → 16 jogos de pré-oitavas (r32)
 
 export default function FifaTournament() {
   const [teams, setTeams] = useState([]);
@@ -157,10 +157,10 @@ export default function FifaTournament() {
       // FIFA não usa grupos
       await supabase.from("teams").update({ group_name: null }).eq("sport_id", sportId);
 
-      // Oitavas: order_idx 1..16, status 'scheduled' (J1 vira ⚠️ na UI)
+      // Pré-oitavas: order_idx 1..16, status 'scheduled' (J1 vira ⚠️ na UI)
       const rows = bracket.map((m, i) => ({
         sport_id: sportId,
-        stage: "oitavas",
+        stage: "r32",
         round: i + 1,           // 1..16
         order_idx: i + 1,       // 1..16 para a fila
         status: "scheduled",
@@ -175,21 +175,30 @@ export default function FifaTournament() {
         return;
       }
 
-      // Placeholders de quartas/semis/3º/final (17..28)
+      // Placeholders de oitavas/quartas/semis/final/3º lugar
       await supabase.from("matches").insert(
         Array.from({ length: 8 }).map((_, i) => ({
           sport_id: sportId,
-          stage: "quartas",
+          stage: "oitavas",
           round: i + 1,
           order_idx: 16 + (i + 1), // 17..24
           status: "scheduled",
         }))
       );
+      await supabase.from("matches").insert(
+        Array.from({ length: 4 }).map((_, i) => ({
+          sport_id: sportId,
+          stage: "quartas",
+          round: i + 1,
+          order_idx: 24 + (i + 1), // 25..28
+          status: "scheduled",
+        }))
+      );
       await supabase.from("matches").insert([
-        { sport_id: sportId, stage: "semi",   round: 1, order_idx: 25, status: "scheduled" },
-        { sport_id: sportId, stage: "semi",   round: 2, order_idx: 26, status: "scheduled" },
-        { sport_id: sportId, stage: "3lugar", round: 1, order_idx: 27, status: "scheduled" },
-        { sport_id: sportId, stage: "final",  round: 1, order_idx: 28, status: "scheduled" },
+        { sport_id: sportId, stage: "semi",   round: 1, order_idx: 29, status: "scheduled" },
+        { sport_id: sportId, stage: "semi",   round: 2, order_idx: 30, status: "scheduled" },
+        { sport_id: sportId, stage: "final",  round: 1, order_idx: 31, status: "scheduled" },
+        { sport_id: sportId, stage: "3lugar", round: 1, order_idx: 32, status: "scheduled" },
       ]);
 
       // Standings (idempotente)
@@ -217,10 +226,8 @@ export default function FifaTournament() {
 
     try {
       setBusy(true);
-
-      const { error } = await supabase.rpc("admin_generate_fifa_oitavas32", {
-        p_sport_id: sportId,
-      });
+      // Recomenda-se usar o RPC que já gera todas as fases e placeholders corretamente
+      const { error } = await supabase.rpc("fifa_seed_32_bracket", { p_sport_name: "FIFA", p_reset: false });
       if (error) throw error;
 
       alert("✅ Partidas do FIFA geradas com sucesso!\n\nVoltando para a tela de campeonatos…");
@@ -241,7 +248,7 @@ export default function FifaTournament() {
         <div>
           <h2 className="text-xl font-bold">Configuração do Campeonato de FIFA</h2>
           <p className="text-sm text-gray-600">
-            Monte as oitavas (16 jogos). Ao confirmar, os jogos entram como <strong>scheduled</strong> com{" "}
+            Monte as pré-oitavas (16 jogos). Ao confirmar, os jogos entram como <strong>scheduled</strong> com{" "}
             <strong>order_idx</strong> fixo: assim, o Jogo 1 aparece em <em>⚠️ Compareçam</em> e o Jogo 2 como <em>Próximo</em>.
           </p>
         </div>
@@ -283,9 +290,9 @@ export default function FifaTournament() {
           )}
         </div>
 
-        {/* Confrontos (oitavas) */}
+        {/* Confrontos (pré-oitavas) */}
         <div className="border rounded p-4 overflow-y-auto max-h-[32rem]">
-          <h3 className="font-semibold mb-2">Confrontos (oitavas)</h3>
+          <h3 className="font-semibold mb-2">Confrontos (pré-oitavas)</h3>
           <ul className="space-y-4">
             {bracket.map((m, idx) => {
               const home = teams.find((t) => t.id === m.home);

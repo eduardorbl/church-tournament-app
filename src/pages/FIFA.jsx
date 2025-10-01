@@ -17,16 +17,18 @@ const LOGO_BUCKET = "team-logos";
 const tz = "America/Sao_Paulo";
 
 const STAGE_FRIENDLY = {
+  r32: "Pré-oitavas",
   oitavas: "Oitavas",
   quartas: "Quartas",
   semi: "Semifinal",
   final: "Final",
+  "3lugar": "3º lugar",
   "1º": "1ª fase",
   "2º": "2ª fase",
   "3º": "3ª fase",
   "4º": "4ª fase",
 };
-const STAGE_ORDER = { "1º": 1, oitavas: 1, "2º": 2, quartas: 2, "3º": 3, semi: 3, "4º": 4, final: 4 };
+const STAGE_ORDER = { r32: 1, oitavas: 2, quartas: 3, semi: 4, final: 5, "3lugar": 5 };
 const friendlyStage = (s) => (s ? STAGE_FRIENDLY[s] || s : "");
 const stageOrder = (s) => STAGE_ORDER[s] ?? STAGE_ORDER[String(s || "").toLowerCase()] ?? 99;
 
@@ -79,9 +81,17 @@ const normalizeLogo = (raw) => {
    J29..J30 ← [25,26], [27,28]
    J31     ← [29,30]
 ----------------------------------------------------------------------------- */
-const PREV_MAP = { 17:[1,2], 18:[3,4], 19:[5,6], 20:[7,8], 21:[9,10], 22:[11,12], 23:[13,14], 24:[15,16],
-                   25:[17,18], 26:[19,20], 27:[21,22], 28:[23,24], 29:[25,26], 30:[27,28], 31:[29,30] };
-const previousFor = (idx) => PREV_MAP[Number(idx)] || null;
+const PREV_WINNERS = {
+  17: [1, 2], 18: [3, 4], 19: [5, 6], 20: [7, 8], 21: [9, 10], 22: [11, 12], 23: [13, 14], 24: [15, 16],
+  25: [17, 18], 26: [19, 20], 27: [21, 22], 28: [23, 24], 29: [25, 26], 30: [27, 28], 31: [29, 30],
+};
+const PREV_LOSERS = {
+  32: [29, 30], // 3º lugar: perdedores das semis (J29, J30)
+};
+const previousFor = (idx, stage) => {
+  if (stage === "3lugar") return PREV_LOSERS[idx] || null;
+  return PREV_WINNERS[idx] || null;
+};
 
 /* ── UI: Título compacto ───────────────────────────────────────────────────── */
 function TitleLine({ order_idx, stage }) {
@@ -320,8 +330,11 @@ export default function FIFA() {
   }, [sportId, loadAll]);
 
   /* ── Derivações ──────────────────────────────────────────────────────────── */
-  const placeholdersFor = useCallback((orderIdx) => {
-    const prev = previousFor(orderIdx);
+  const placeholdersFor = useCallback((orderIdx, stage) => {
+    const prev = previousFor(orderIdx, stage);
+    if (stage === "3lugar" && prev) {
+      return { home: `Perdedor J${prev[0]}`, away: `Perdedor J${prev[1]}` };
+    }
     return prev ? { home: `Vencedor J${prev[0]}`, away: `Vencedor J${prev[1]}` } : null;
   }, []);
 
@@ -334,28 +347,6 @@ export default function FIFA() {
     }
     const ordered = Object.keys(groups).sort((a, b) => stageOrder(a) - stageOrder(b));
     return ordered.map((k) => ({ stage: k, items: groups[k].sort((a, b) => (a.order_idx ?? 0) - (b.order_idx ?? 0)) }));
-  }, [matches]);
-
-  const scheduled = useMemo(() => {
-    const arr = (matches || []).filter(
-      (m) => m.status === "scheduled" && m.home?.id && m.away?.id
-    );
-    arr.sort((a, b) => {
-      const da = a.starts_at ? parseDateSafe(a.starts_at)?.getTime() ?? Number.POSITIVE_INFINITY : Number.POSITIVE_INFINITY;
-      const db = b.starts_at ? parseDateSafe(b.starts_at)?.getTime() ?? Number.POSITIVE_INFINITY : Number.POSITIVE_INFINITY;
-      return da - db;
-    });
-    return arr;
-  }, [matches]);
-
-  const finished = useMemo(() => {
-    const arr = (matches || []).filter((m) => m.status === "finished");
-    arr.sort((a, b) => {
-      const ta = parseDateSafe(a.updated_at || a.starts_at || 0)?.getTime() ?? 0;
-      const tb = parseDateSafe(b.updated_at || b.starts_at || 0)?.getTime() ?? 0;
-      return tb - ta;
-    });
-    return arr;
   }, [matches]);
 
   /* ── Render ──────────────────────────────────────────────────────────────── */
@@ -393,7 +384,7 @@ export default function FIFA() {
                 {items.length ? (
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                     {items.map((m) => (
-                      <BracketMatchCard key={m.id} match={m} placeholders={placeholdersFor(Number(m.order_idx))} />
+                      <BracketMatchCard key={m.id} match={m} placeholders={placeholdersFor(Number(m.order_idx), m.stage)} />
                     ))}
                   </div>
                 ) : (
@@ -403,40 +394,7 @@ export default function FIFA() {
             ))}
           </section>
 
-          {/* 2) JOGOS AGENDADOS (lista integral) */}
-          <section className="space-y-6">
-            <h3 className="text-lg font-bold">Jogos agendados</h3>
-
-            {/* Próximos */}
-            <div className="space-y-2">
-              <h4 className="text-sm font-semibold text-gray-700">Próximos jogos</h4>
-              {scheduled.length ? (
-                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                  {scheduled.map((m) => (
-                    <ListMatchCard key={m.id} match={m} />
-                  ))}
-                </div>
-              ) : (
-                <div className="text-xs text-gray-500">Nenhum jogo agendado no momento.</div>
-              )}
-            </div>
-
-            {/* Encerrados (recentes) */}
-            <div className="space-y-2">
-              <h4 className="text-sm font-semibold text-gray-700">Encerrados (recentes)</h4>
-              {finished.length ? (
-                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                  {finished.slice(0, 12).map((m) => (
-                    <ListMatchCard key={m.id} match={m} />
-                  ))}
-                </div>
-              ) : (
-                <div className="text-xs text-gray-500">Sem resultados recentes.</div>
-              )}
-            </div>
-          </section>
-
-          {/* 3) REGULAMENTO */}
+          {/* 2) REGULAMENTO */}
           <section className="space-y-3">
             <h3 className="text-lg font-bold">Regulamento</h3>
             <div className="rounded-2xl border border-gray-200 bg-white p-4 text-sm text-gray-700 shadow-sm">
