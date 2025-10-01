@@ -409,6 +409,16 @@ function computeStandingsFromMatchesVolley(matches, teamsById) {
   return out;
 }
 
+// helper para normalizar grupo
+const normGroup = (g) => {
+  if (!g) return null;
+  const s = String(g)
+    .normalize("NFD").replace(/\p{Diacritic}/gu, "")
+    .trim().toUpperCase();
+  const m = s.match(/^GRUPO\s+([A-Z0-9]+)$/);
+  return m ? m[1] : s;
+};
+
 export default function Volei() {
   const [sportId, setSportId] = useState(null);
   const [teamsById, setTeamsById] = useState({});
@@ -674,19 +684,35 @@ export default function Volei() {
     const missing = allTeamIds.filter((id) => !present.has(String(id)));
     if (missing.length === 0) return;
 
-    // tenta inferir grupo de cada time a partir dos jogos (home/away)
-    const groupByTeam = new Map();
+    // conta frequência de grupos por time
+    const freqByTeam = new Map();
     for (const m of matches || []) {
-      const g = m?.group_name || "-";
-      if (m?.home?.id) groupByTeam.set(String(m.home.id), g);
-      if (m?.away?.id) groupByTeam.set(String(m.away.id), g);
+      const g = normGroup(m?.group_name);
+      if (!g) continue;
+      const bump = (id) => {
+        if (!id) return;
+        const k = String(id);
+        const f = freqByTeam.get(k) || {};
+        f[g] = (f[g] || 0) + 1;
+        freqByTeam.set(k, f);
+      };
+      bump(m?.home?.id);
+      bump(m?.away?.id);
     }
+    const pickGroup = (id) => {
+      const f = freqByTeam.get(String(id)) || {};
+      const best = Object.entries(f).sort((a,b)=>b[1]-a[1])[0];
+      return best ? best[0] : "-";
+    };
 
     // cria linhas zeradas para os ausentes
     const zeroRows = missing.map((id) => {
       const t = teamsRef.current[id] || {};
+      // Prioriza o grupo cadastrado no time, depois o mais frequente nas partidas, senão '-'
+      const groupFromTeam = t.group_name ? normGroup(t.group_name) : null;
+      const group = groupFromTeam || pickGroup(id) || "-";
       return {
-        group_name: groupByTeam.get(String(id)) || "-",
+        group_name: group,
         team_id: isNaN(Number(id)) ? id : Number(id),
         team_name: t.name || "—",
         matches_played: 0,
