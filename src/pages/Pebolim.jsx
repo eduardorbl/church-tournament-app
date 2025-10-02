@@ -3,9 +3,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Link } from "react-router-dom";
 import { supabase } from "../supabaseClient";
 import TeamBadge from "../components/TeamBadge";
+import { HelpCircle } from "lucide-react";
 
 /* ──────────────────────────────────────────────────────────────────────────────
-   Hub Pebolim — Estrutura visual
+   Hub Pebolim — Estrutura
    1) Classificação (se houver grupos)
    2) Chaveamento (sempre visível, com placeholders)
    3) Jogos agendados (lista integral, com filtros opcionais)
@@ -90,7 +91,6 @@ function TitleLine({ order_idx, stage, group_name }) {
 
 /* ── UI: TeamChip ──────────────────────────────────────────────────────────── */
 function TeamChip({ team, align = "left", badge = 28 }) {
-  // normaliza nome para string SEMPRE
   const displayName = (() => {
     const n = team?.name;
     if (typeof n === "string") return n;
@@ -99,31 +99,24 @@ function TeamChip({ team, align = "left", badge = 28 }) {
   })();
 
   const has = Boolean(team?.id);
+  const isPlaceholder = !has && displayName === "A definir";
   const content = (
     <>
-      {align === "right" ? null : (
-        <TeamBadge team={{ ...(team || {}), name: displayName }} size={badge} />
-      )}
+      {align === "right" ? null : <TeamBadge team={{ ...(team || {}), name: displayName }} size={badge} />}
       <span
-        className={`truncate ${has ? "text-gray-900" : "text-gray-400"} ${align === "right" ? "text-right" : ""}`}
+        className={`truncate ${has ? "text-gray-900" : "text-gray-400 flex items-center gap-1"} ${align === "right" ? "text-right" : ""}`}
         title={displayName}
       >
         {displayName}
+        {isPlaceholder ? <HelpCircle className="inline-block ml-1 w-4 h-4 text-gray-400" /> : null}
       </span>
-      {align === "right" ? (
-        <TeamBadge team={{ ...(team || {}), name: displayName }} size={badge} />
-      ) : null}
+      {align === "right" ? <TeamBadge team={{ ...(team || {}), name: displayName }} size={badge} /> : null}
     </>
   );
 
   if (!has) {
-    return (
-      <div className={`min-w-0 flex items-center gap-2 ${align === "right" ? "justify-end" : ""}`}>
-        {content}
-      </div>
-    );
+    return <div className={`min-w-0 flex items-center gap-2 ${align === "right" ? "justify-end" : ""}`}>{content}</div>;
   }
-
   return (
     <Link
       to={`/team/${team.id}`}
@@ -209,12 +202,8 @@ function compareByPoints(a, b) {
   const aw = Number(a.wins ?? 0), bw = Number(b.wins ?? 0);
   if (bw !== aw) return bw - aw;
 
-  const agd = Number(
-    a.goal_difference ?? (Number(a.goals_for ?? 0) - Number(a.goals_against ?? 0))
-  );
-  const bgd = Number(
-    b.goal_difference ?? (Number(b.goals_for ?? 0) - Number(b.goals_against ?? 0))
-  );
+  const agd = Number(a.goal_difference ?? (Number(a.goals_for ?? 0) - Number(a.goals_against ?? 0)));
+  const bgd = Number(b.goal_difference ?? (Number(b.goals_for ?? 0) - Number(b.goals_against ?? 0)));
   if (bgd !== agd) return bgd - agd;
 
   const agf = Number(a.goals_for ?? 0), bgf = Number(b.goals_for ?? 0);
@@ -225,20 +214,53 @@ function compareByPoints(a, b) {
 
 /* ── Classificação ─────────────────────────────────────────────────────────── */
 function StandingsTable({ standings, teamsById }) {
+  // Garante que todos os times dos grupos apareçam, mesmo zerados
   const groups = useMemo(() => {
+    // 1) Agrupa standings existentes
     const map = {};
     for (const r of standings || []) {
       const g = r.group_name || "-";
       if (!map[g]) map[g] = [];
       map[g].push(r);
     }
-    for (const g of Object.keys(map)) {
+
+    // 2) Descobre todos os grupos a partir dos times (teamsById)
+    const allGroups = new Set();
+    const teamsByGroup = {};
+    for (const tid in teamsById) {
+      const t = teamsById[tid];
+      const g = t.group_name || "-";
+      allGroups.add(g);
+      if (!teamsByGroup[g]) teamsByGroup[g] = [];
+      teamsByGroup[g].push(t);
+    }
+
+    // 3) Para cada grupo, adiciona linhas zeradas para times ausentes
+    for (const g of allGroups) {
+      const present = new Set((map[g] || []).map((r) => String(r.team_id)));
+      const missing = (teamsByGroup[g] || []).filter((t) => !present.has(String(t.id)));
+      const zeroRows = missing.map((t) => ({
+        group_name: g,
+        team_id: t.id,
+        team_name: t.name,
+        matches_played: 0,
+        wins: 0,
+        draws: 0,
+        losses: 0,
+        goals_for: 0,
+        goals_against: 0,
+        goal_difference: 0,
+        points: 0,
+      }));
+      map[g] = [...(map[g] || []), ...zeroRows];
+
+      // Ordena e numera
       map[g].sort(compareByPoints);
-      // opcional: recalcula a posição visual para mostrar na primeira coluna
       map[g] = map[g].map((row, i) => ({ ...row, rank: i + 1 }));
     }
+
     return map;
-  }, [standings]);
+  }, [standings, teamsById]);
 
   const groupKeys = Object.keys(groups).sort();
   if (groupKeys.length === 0) return <div className="text-xs text-gray-500">Sem dados de classificação.</div>;
@@ -255,7 +277,8 @@ function StandingsTable({ standings, teamsById }) {
                 <th className="py-1 text-left">Time</th>
                 <th className="w-10 py-1 text-center">P</th>
                 <th className="w-10 py-1 text-center">V</th>
-                <th className="w-10 py-1 text-center">E</th>                <th className="w-10 py-1 text-center">D</th>
+                <th className="w-10 py-1 text-center">E</th>
+                <th className="w-10 py-1 text-center">D</th>
                 <th className="w-10 py-1 text-center">GP</th>
                 <th className="w-10 py-1 text-center">GC</th>
                 <th className="w-12 py-1 text-center">+/-</th>
@@ -268,15 +291,14 @@ function StandingsTable({ standings, teamsById }) {
                   teamsById[row.team_id] && typeof teamsById[row.team_id] === "object"
                     ? teamsById[row.team_id]
                     : { id: row.team_id, name: String(row.team_name ?? teamsById[row.team_id]?.name ?? "—") };
+                const safeTeam = { ...team, name: typeof team.name === "string" ? team.name : String(team.name ?? "—") };
                 return (
                   <tr key={`${g}-${row.team_id}`} className="border-b">
                     <td className="py-1 pl-3">{row.rank}</td>
                     <td className="py-1">
-                      <Link to={`/team/${team.id}`} className="flex items-center gap-2 hover:underline">
-                        <TeamBadge team={team} size={20} />
-                        <span className="truncate">
-                          {typeof team.name === "string" ? team.name : String(team.name ?? "—")}
-                        </span>
+                      <Link to={`/team/${safeTeam.id}`} className="flex items-center gap-2 hover:underline">
+                        <TeamBadge team={safeTeam} size={20} />
+                        <span className="truncate">{safeTeam.name}</span>
                       </Link>
                     </td>
                     <td className="py-1 text-center">{row.matches_played}</td>
@@ -298,6 +320,7 @@ function StandingsTable({ standings, teamsById }) {
     </div>
   );
 }
+
 
 /* ── Knockout helpers ──────────────────────────────────────────────────────── */
 function extractKnockout(matches) {
@@ -360,7 +383,6 @@ class ErrorBoundary extends React.Component {
     return { hasError: true, error };
   }
   componentDidCatch(error, info) {
-    // loga no console para fácil diagnóstico
     console.error("Pebolim ErrorBoundary:", error, info);
   }
   render() {
@@ -376,20 +398,17 @@ class ErrorBoundary extends React.Component {
   }
 }
 
-/* ── Página — Pebolim (Hub) ───────────────────────────────────────────────── */
-// Normalização de texto
+/* ── Normalizações ─────────────────────────────────────────────────────────── */
 const norm = (s) =>
   typeof s === "string"
     ? s.normalize("NFD").replace(/\p{Diacritic}/gu, "").trim().toLowerCase()
     : "";
-// Unifica fase
 const normStage = (s) => {
   const m = norm(s);
   if (m === "semifinal" || m === "semi-final" || m === "semis") return "semi";
   if (m === "3º lugar" || m === "3lugar" || m === "3-lugar" || m === "terceiro") return "3lugar";
   return m;
 };
-// Unifica status
 const normStatus = (s) => {
   const m = norm(s);
   if (m === "agendado" || m === "programado" || m === "scheduled") return "scheduled";
@@ -398,15 +417,8 @@ const normStatus = (s) => {
   if (m === "encerrado" || m === "finalizado" || m === "finished") return "finished";
   return m || "scheduled";
 };
-// Escolhe chave de ordem segura
-const safeOrder = (r) => {
-  const oi = Number(r.order_idx);
-  const rd = Number(r.round);
-  if (Number.isFinite(oi)) return oi;
-  if (Number.isFinite(rd)) return rd;
-  return r.id;
-};
 
+/* ── Página — Pebolim (Hub) ───────────────────────────────────────────────── */
 export default function Pebolim() {
   const [sportId, setSportId] = useState(null);
   const [teamsById, setTeamsById] = useState({});
@@ -425,69 +437,128 @@ export default function Pebolim() {
   /* Loaders */
   const loadSportId = useCallback(async () => {
     try {
-      const { data, error } = await supabase.from("sports").select("id").eq("name", "Pebolim").maybeSingle();
+      const { data, error } = await supabase.from("sports").select("id").eq("name", SPORT_LABEL).maybeSingle();
       if (error) {
         console.error("Erro ao carregar sport id:", error);
-        return;
       }
-      if (data?.id) setSportId(data.id);
+      setSportId(data?.id ?? null);
     } catch (e) {
       console.error("Exceção loadSportId:", e);
+      setSportId(null);
     }
   }, []);
 
   const loadTeams = useCallback(async (sid) => {
     try {
-      const { data, error } = await supabase.from("teams").select("id, name, logo_url, color").eq("sport_id", sid);
-      if (error) {
-        console.error("Erro ao carregar teams:", error);
-        return;
+      // 1) por sport_id
+      if (sid) {
+        const byId = await supabase.from("teams").select("id, name, logo_url, color, group_name").eq("sport_id", sid);
+        if (!byId.error && Array.isArray(byId.data) && byId.data.length) {
+          const map = {};
+          for (const t of byId.data) {
+            map[t.id] = {
+              ...t,
+              name: String(t.name ?? "—"),
+              logo_url: normalizeLogo(t.logo_url),
+              group_name: t.group_name ?? "-",
+            };
+          }
+          setTeamsById(map);
+          teamsRef.current = map;
+          return;
+        }
       }
+      // 2) fallback por NOME
+      const byName = await supabase
+        .from("teams")
+        .select("id, name, logo_url, color, group_name, sport:sport_id!inner(name)")
+        .eq("sport.name", SPORT_LABEL);
+
+      if (byName.error) throw byName.error;
+
       const map = {};
-      for (const t of data || []) {
-        map[t.id] = { 
-          ...t, 
+      for (const t of byName.data || []) {
+        map[t.id] = {
+          ...t,
           name: String(t.name ?? "—"),
-          logo_url: normalizeLogo(t.logo_url) 
+          logo_url: normalizeLogo(t.logo_url),
+          group_name: t.group_name ?? "-",
         };
       }
       setTeamsById(map);
-      teamsRef.current = map; // mantém o ref sincronizado
+      teamsRef.current = map;
     } catch (e) {
       console.error("Exceção loadTeams:", e);
+      setTeamsById({});
     }
   }, []);
 
   const loadStandings = useCallback(async (sid) => {
     try {
       // 1) VIEW por sport_id
-      const v = await supabase
+      if (sid) {
+        const v = await supabase
+          .from("standings_view")
+          .select("group_name, rank, team_id, team_name, matches_played, wins, draws, losses, goals_for, goals_against, goal_difference, points")
+          .eq("sport_id", sid)
+          .order("group_name", { ascending: true, nullsFirst: true })
+          .order("rank", { ascending: true });
+
+        if (!v.error && Array.isArray(v.data) && v.data.length > 0) {
+          setStandings(v.data);
+          return;
+        }
+      }
+
+      // 2) VIEW por NOME
+      const v2 = await supabase
         .from("standings_view")
-        .select("group_name, rank, team_id, team_name, matches_played, wins, draws, losses, goals_for, goals_against, goal_difference, points")
-        .eq("sport_id", sid)
+        .select("group_name, rank, team_id, team_name, matches_played, wins, draws, losses, goals_for, goals_against, goal_difference, points, sport:sport_id!inner(name)")
+        .eq("sport.name", SPORT_LABEL)
         .order("group_name", { ascending: true, nullsFirst: true })
         .order("rank", { ascending: true });
 
-      if (!v.error && Array.isArray(v.data) && v.data.length > 0) {
-        setStandings(v.data);
+      if (!v2.error && Array.isArray(v2.data) && v2.data.length > 0) {
+        setStandings(v2.data.map(({ sport, ...r }) => r));
         return;
       }
 
-      // 2) Fallback: tabela 'standings'
-      const j = await supabase
+      // 3) TABELA por sport_id
+      if (sid) {
+        const j = await supabase
+          .from("standings")
+          .select(`
+            group_name, rank, team_id,
+            matches_played, wins, draws, losses,
+            goals_for, goals_against, goal_difference, points,
+            team:teams!standings_team_id_fkey(name)
+          `)
+          .eq("sport_id", sid)
+          .order("group_name", { ascending: true, nullsFirst: true })
+          .order("rank", { ascending: true });
+
+        if (!j.error && Array.isArray(j.data) && j.data.length > 0) {
+          setStandings(j.data.map((r) => ({ ...r, team_name: r.team?.name })));
+          return;
+        }
+      }
+
+      // 4) TABELA por NOME
+      const j2 = await supabase
         .from("standings")
         .select(`
           group_name, rank, team_id,
           matches_played, wins, draws, losses,
           goals_for, goals_against, goal_difference, points,
-          team:teams!standings_team_id_fkey(name)
+          team:teams!standings_team_id_fkey(name),
+          sport:sport_id!inner(name)
         `)
-        .eq("sport_id", sid)
+        .eq("sport.name", SPORT_LABEL)
         .order("group_name", { ascending: true, nullsFirst: true })
         .order("rank", { ascending: true });
 
-      const rows = (j.data || []).map((r) => ({ ...r, team_name: r.team?.name }));
-      setStandings(rows);
+      const rows2 = (j2.data || []).map((r) => ({ ...r, team_name: r.team?.name }));
+      setStandings(rows2);
     } catch (e) {
       console.error("Exceção loadStandings:", e);
       setStandings([]);
@@ -496,56 +567,93 @@ export default function Pebolim() {
 
   const loadMatches = useCallback(async (sid) => {
     try {
-      if (!sid) { setMatches([]); return; }
+      let rows = [];
 
-      const { data, error } = await supabase
-        .from("matches")
-        .select(`
-          id, sport_id, stage, round, group_name, starts_at, updated_at, venue, status, home_score, away_score, order_idx,
-          home:home_team_id ( id, name, logo_url, color ),
-          away:away_team_id ( id, name, logo_url, color )
-        `)
-        .eq("sport_id", sid);
-      if (error) throw error;
-      const rows = (data || []).map((r) => ({
-        id: r.id,
-        sport_id: r.sport_id,
-        order_idx: Number.isFinite(Number(r.order_idx)) ? Number(r.order_idx) : null,
-        stage: normStage(r.stage),
-        round: r.round,
-        group_name: r.group_name,
-        starts_at: r.starts_at,
-        updated_at: r.updated_at,
-        venue: r.venue,
-        status: normStatus(r.status),
-        home_score: r.home_score,
-        away_score: r.away_score,
-        home: r.home ? { ...r.home, logo_url: normalizeLogo(r.home.logo_url) } : null,
-        away: r.away ? { ...r.away, logo_url: normalizeLogo(r.away.logo_url) } : null,
-      }));
+      // 1) VIEW detalhada por sport_id (se existir)
+      if (sid) {
+        const { data: vrows, error: verr } = await supabase
+          .from("match_detail_view")
+          .select(`
+            id, sport_id, order_idx,
+            stage, round, group_name, starts_at, updated_at, venue, status,
+            home_team_id, home_team_name, home_team_color, home_team_logo,
+            away_team_id, away_team_name, away_team_color, away_team_logo,
+            home_score, away_score
+          `)
+          .eq("sport_id", sid);
+
+        if (!verr && Array.isArray(vrows) && vrows.length) {
+          rows = vrows.map((r) => ({
+            id: r.id,
+            sport_id: r.sport_id,
+            order_idx: r.order_idx,
+            stage: normStage(r.stage),
+            round: r.round,
+            group_name: r.group_name,
+            starts_at: r.starts_at,
+            updated_at: r.updated_at,
+            venue: r.venue,
+            status: normStatus(r.status),
+            home_score: r.home_score,
+            away_score: r.away_score,
+            home: r.home_team_id ? { id: r.home_team_id, name: String(r.home_team_name ?? "A definir"), color: r.home_team_color, logo_url: normalizeLogo(r.home_team_logo) } : null,
+            away: r.away_team_id ? { id: r.away_team_id, name: String(r.away_team_name ?? "A definir"), color: r.away_team_color, logo_url: normalizeLogo(r.away_team_logo) } : null,
+          }));
+        }
+      }
+
+      // 2) Fallback: TABELA por NOME (join inner)
+      if (!rows.length) {
+        const { data: jrows, error: jerr } = await supabase
+          .from("matches")
+          .select(`
+            id, stage, round, group_name, starts_at, updated_at, venue, status,
+            home_score, away_score, order_idx,
+            home:home_team_id ( id, name, logo_url, color ),
+            away:away_team_id ( id, name, logo_url, color ),
+            sport:sport_id!inner(name)
+          `)
+          .eq("sport.name", SPORT_LABEL);
+
+        if (jerr) throw jerr;
+
+        rows = (jrows || []).map((m) => ({
+          id: m.id,
+          order_idx: Number.isFinite(Number(m.order_idx)) ? Number(m.order_idx) : null,
+          stage: normStage(m.stage),
+          round: m.round,
+          group_name: m.group_name,
+          starts_at: m.starts_at,
+          updated_at: m.updated_at,
+          venue: m.venue,
+          status: normStatus(m.status),
+          home_score: m.home_score,
+          away_score: m.away_score,
+          home: m.home ? { ...m.home, name: String(m.home.name ?? "A definir"), logo_url: normalizeLogo(m.home.logo_url) } : null,
+          away: m.away ? { ...m.away, name: String(m.away.name ?? "A definir"), logo_url: normalizeLogo(m.away.logo_url) } : null,
+        }));
+      }
+
+      // Ordenação
       const phaseRank = { grupos: 1, oitavas: 2, quartas: 3, semi: 4, "3lugar": 5, final: 6 };
       const ord = (x) => (Number.isFinite(Number(x?.order_idx)) ? Number(x.order_idx) : Number.MAX_SAFE_INTEGER);
-      rows.sort((a, b) =>
-        (phaseRank[a.stage] ?? 99) - (phaseRank[b.stage] ?? 99) ||
-        ord(a) - ord(b)
-      );
+      rows.sort((a, b) => (phaseRank[a.stage] ?? 99) - (phaseRank[b.stage] ?? 99) || ord(a) - ord(b));
+
       setMatches(rows);
-      console.info("[Pebolim] rows:", rows.length, rows.slice(0, 2));
     } catch (e) {
       console.error("Exceção loadMatches (pebolim):", e);
       setMatches([]);
     }
-  }, []); // <- sem deps
-  
+  }, []);
 
   const loadAll = useCallback(
     async (sid, { skeleton = false } = {}) => {
       if (skeleton) setLoading(true);
       try {
-        await loadTeams(sid); // times antes de matches
+        await loadTeams(sid);
         await Promise.all([loadStandings(sid), loadMatches(sid)]);
       } finally {
-        if (skeleton) setLoading(false);
+        setLoading(false);
       }
     },
     [loadTeams, loadStandings, loadMatches]
@@ -557,24 +665,26 @@ export default function Pebolim() {
   }, [loadSportId]);
 
   useEffect(() => {
-    if (!sportId) return;
+    // roda sempre: com sportId (por id) ou sem sportId (fallback por nome)
     loadAll(sportId, { skeleton: true });
 
+    // Realtime só quando tiver sportId (para filtrar por id)
     if (channelRef.current) {
       try { supabase.removeChannel(channelRef.current); } catch {}
       channelRef.current = null;
     }
-    const onChange = () => {
-      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
-      refreshTimerRef.current = setTimeout(() => loadAll(sportId, { skeleton: false }), 1000);
-    };
-    const ch = supabase
-      .channel(`pebolim-hub-${sportId}`)
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "matches", filter: `sport_id=eq.${sportId}` }, onChange)
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "matches", filter: `sport_id=eq.${sportId}` }, onChange)
-      .on("postgres_changes", { event: "DELETE", schema: "public", table: "matches", filter: `sport_id=eq.${sportId}` }, onChange)
-      .subscribe();
-    channelRef.current = ch;
+    if (sportId) {
+      const onChange = () => {
+        if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = setTimeout(() => loadAll(sportId, { skeleton: false }), 400);
+      };
+      const ch = supabase
+        .channel(`pebolim-hub-${sportId}`)
+        .on("postgres_changes", { event: "*", schema: "public", table: "matches", filter: `sport_id=eq.${sportId}` }, onChange)
+        .on("postgres_changes", { event: "*", schema: "public", table: "standings", filter: `sport_id=eq.${sportId}` }, onChange)
+        .subscribe();
+      channelRef.current = ch;
+    }
 
     return () => {
       if (refreshTimerRef.current) {
@@ -586,18 +696,26 @@ export default function Pebolim() {
         channelRef.current = null;
       }
     };
-  }, [sportId]); // <- só depende de sportId
+  }, [sportId, loadAll]);
 
   /* Derivações */
-  const hasGroups = useMemo(() => (standings?.length ? true : (matches || []).some((m) => !!m.group_name)), [standings, matches]);
+  const hasGroups = useMemo(() => {
+    if (standings?.length) return true;
+    if ((matches || []).some((m) => !!m.group_name)) return true;
+    if (Object.values(teamsById || {}).some((t) => !!t.group_name)) return true;
+    return false;
+  }, [standings, matches, teamsById]);
+
   const knockout = useMemo(() => extractKnockout(matches), [matches]);
   const provisionalFromStandings = useMemo(() => computeProvisionalFromStandings(standings, teamsById), [standings, teamsById]);
 
   const groupOptions = useMemo(() => {
     const set = new Set();
     (matches || []).forEach((m) => m.group_name && set.add(m.group_name));
+    (standings || []).forEach((r) => r.group_name && set.add(r.group_name));
+    Object.values(teamsById || {}).forEach((t) => t.group_name && set.add(t.group_name));
     return ["todos", ...Array.from(set).sort()];
-  }, [matches]);
+  }, [matches, standings, teamsById]);
 
   const stageOptions = useMemo(() => {
     const set = new Set();
@@ -608,7 +726,11 @@ export default function Pebolim() {
   }, [matches]);
 
   const scheduledAll = useMemo(() => {
-    let arr = (matches || []).filter((m) => m.status === "scheduled" && m.home?.id && m.away?.id);
+    let arr = (matches || []).filter((m) => {
+      if (m.status !== "scheduled") return false;
+      if (m.group_name) return true;
+      return m.home?.id && m.away?.id;
+    });
     if (groupFilter !== "todos") arr = arr.filter((m) => m.group_name === groupFilter);
     if (stageFilter !== "todos") arr = arr.filter((m) => m.stage === stageFilter);
     arr.sort((a, b) => {
@@ -655,7 +777,7 @@ export default function Pebolim() {
           </div>
         ) : (
           <>
-            {/* 1) CLASSIFICAÇÃO */}
+            {/* 1) CLASSIFICAÇÃO (sempre renderiza; mostra vazio se não houver dados) */}
             <section className="space-y-4">
               <h3 className="text-lg font-bold">Tabela de classificação</h3>
               <StandingsTable standings={standings} teamsById={teamsById} />
@@ -682,9 +804,7 @@ export default function Pebolim() {
                 <div className="space-y-2">
                   <h4 className="text-sm font-semibold text-gray-700">Quartas de final</h4>
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                    {Array.from({
-                      length: Math.max(knockout.quartas?.length || 0, provisionalFromStandings?.quarters?.length || 0, 4),
-                    }).map((_, i) => {
+                    {Array.from({ length: Math.max(knockout.quartas?.length || 0, provisionalFromStandings?.quarters?.length || 0, 4) }).map((_, i) => {
                       const m = knockout.quartas?.[i];
                       const ph = provisionalFromStandings?.quarters?.[i];
                       return <BracketMatchCard key={`q-${m?.id ?? i}`} match={m} placeholder={ph} />;
@@ -698,9 +818,7 @@ export default function Pebolim() {
                 <div className="space-y-2">
                   <h4 className="text-sm font-semibold text-gray-700">Semifinais</h4>
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                    {Array.from({
-                      length: Math.max(knockout.semis?.length || 0, provisionalFromStandings?.semis?.length || 0, 2),
-                    }).map((_, i) => {
+                    {Array.from({ length: Math.max(knockout.semis?.length || 0, provisionalFromStandings?.semis?.length || 0, 2) }).map((_, i) => {
                       const m = knockout.semis?.[i];
                       const ph = provisionalFromStandings?.semis?.[i];
                       return <BracketMatchCard key={`s-${m?.id ?? i}`} match={m} placeholder={ph} />;
@@ -778,23 +896,12 @@ export default function Pebolim() {
               <h3 className="text-lg font-bold">Regulamento</h3>
               <div className="rounded-2xl border border-gray-200 bg-white p-4 text-sm text-gray-700 shadow-sm">
                 <ul className="list-disc space-y-1 pl-5">
-                  <li>
-                    <strong>Duração/placar:</strong> partidas em <strong>1 rodada de 4 gols</strong>.
-                  </li>
-                  <li>
-                    <strong>Formato:</strong> fase de grupos (até <strong>8 grupos de 3</strong>) e mata-mata (quartas → semis → final). Se o torneio for direto em mata-mata, o hub começa pelo chaveamento.
-                  </li>
-                  <li>
-                    <strong>Tabela de pontos (grupos):</strong> vitória <strong>3 pts</strong>, empate <strong>1 pt</strong>, derrota <strong>0 pt</strong>; desempate por <strong>saldo de gols</strong> e depois <strong>gols pró</strong>.
-                  </li>
-                  <li>
-                    <strong>Definições do KO:</strong> jogos únicos; em caso de empate, aplica-se a regra da organização (ex.: gol de ouro).
-                  </li>
-                  <li>
-                    <strong>WO:</strong> atraso acima do tolerado pode resultar em <strong>WO</strong>.
-                  </li>
+                  <li><strong>Duração/placar:</strong> partidas em <strong>1 rodada de 4 gols</strong>.</li>
+                  <li><strong>Formato:</strong> fase de grupos (até <strong>8 grupos de 3</strong>) e mata-mata (quartas → semis → final). Se for direto no mata-mata, o hub começa pelo chaveamento.</li>
+                  <li><strong>Tabela de pontos:</strong> vitória <strong>3 pts</strong>, empate <strong>1 pt</strong>, derrota <strong>0 pt</strong>; desempate por <strong>saldo de gols</strong> e <strong>gols pró</strong>.</li>
+                  <li><strong>Mata-mata:</strong> jogos únicos; em caso de empate, regra da organização (ex.: gol de ouro).</li>
+                  <li><strong>WO:</strong> atraso acima do tolerado pode resultar em <strong>WO</strong>.</li>
                 </ul>
-                {/* <a href="/regulamento-pebolim.pdf" className="mt-2 inline-flex text-blue-600 hover:underline">Abrir regulamento completo</a> */}
               </div>
             </section>
           </>
@@ -803,4 +910,3 @@ export default function Pebolim() {
     </ErrorBoundary>
   );
 }
-

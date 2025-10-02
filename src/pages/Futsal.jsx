@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useRef, useState, useCallback } from "react"
 import { Link } from "react-router-dom";
 import { supabase } from "../supabaseClient";
 import TeamBadge from "../components/TeamBadge";
+import { HelpCircle } from "lucide-react";
 
 /* =========================
    Constantes / helpers
@@ -124,14 +125,16 @@ function TeamChip({ team, align = "left", badge = 28 }) {
   })();
 
   const has = Boolean(team?.id);
+  const isPlaceholder = !has && displayName === "A definir";
   const content = (
     <>
       {align === "right" ? null : <TeamBadge team={{ ...(team || {}), name: displayName }} size={badge} />}
       <span
-        className={`truncate ${has ? "text-gray-900" : "text-gray-400"} ${align === "right" ? "text-right" : ""}`}
+        className={`truncate ${has ? "text-gray-900" : "text-gray-400 flex items-center gap-1"} ${align === "right" ? "text-right" : ""}`}
         title={displayName}
       >
         {displayName}
+        {isPlaceholder ? <HelpCircle className="inline-block ml-1 w-4 h-4 text-gray-400" /> : null}
       </span>
       {align === "right" ? <TeamBadge team={{ ...(team || {}), name: displayName }} size={badge} /> : null}
     </>
@@ -155,45 +158,44 @@ function TeamChip({ team, align = "left", badge = 28 }) {
 /* =========================
    Cartões
    ========================= */
-   function BracketMatchCard({ match, placeholder }) {
-    const home = match?.home || (placeholder?.home ? { name: placeholder.home } : null);
-    const away = match?.away || (placeholder?.away ? { name: placeholder.away } : null);
-    const homeName = home?.name || placeholder?.home || "A definir";
-    const awayName = away?.name || placeholder?.away || "A definir";
-    const showScore = match?.status && match.status !== "scheduled";
-    const homeScore = Number(match?.home_score ?? 0);
-    const awayScore = Number(match?.away_score ?? 0);
-  
-    const body = (
-      <div className="rounded-2xl border border-gray-200 bg-white p-3 shadow-sm transition hover:bg-gray-50">
-        <TitleLine order_idx={match?.order_idx} stage={match?.stage} />
-        <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
-          <div className="min-w-0 justify-self-start">
-            <TeamChip team={home?.id ? home : { name: homeName }} />
-          </div>
-          <div className="justify-self-center text-xs text-gray-400">x</div>
-          <div className="min-w-0 justify-self-end">
-            <TeamChip team={away?.id ? away : { name: awayName }} align="right" />
-          </div>
+function BracketMatchCard({ match, placeholder }) {
+  const home = match?.home || (placeholder?.home ? { name: placeholder.home } : null);
+  const away = match?.away || (placeholder?.away ? { name: placeholder.away } : null);
+  const homeName = home?.name || placeholder?.home || "A definir";
+  const awayName = away?.name || placeholder?.away || "A definir";
+  const showScore = match?.status && match.status !== "scheduled";
+  const homeScore = Number(match?.home_score ?? 0);
+  const awayScore = Number(match?.away_score ?? 0);
+
+  const body = (
+    <div className="rounded-2xl border border-gray-200 bg-white p-3 shadow-sm transition hover:bg-gray-50">
+      <TitleLine order_idx={match?.order_idx} stage={match?.stage} />
+      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
+        <div className="min-w-0 justify-self-start">
+          <TeamChip team={home?.id ? home : { name: homeName }} />
         </div>
-        <div className="mt-1 flex items-center justify-between text-[11px] text-gray-500">
-          <span className="truncate">{match?.starts_at ? fmtDate(match.starts_at) : match?.venue || ""}</span>
-          {showScore ? (
-            <span className="tabular-nums font-semibold text-gray-700">
-              {homeScore} <span className="text-gray-400">x</span> {awayScore}
-            </span>
-          ) : null}
+        <div className="justify-self-center text-xs text-gray-400">x</div>
+        <div className="min-w-0 justify-self-end">
+          <TeamChip team={away?.id ? away : { name: awayName }} align="right" />
         </div>
       </div>
-    );
-  
-    // 👉 Só cria Link se existir match.id
-    return match?.id ? (
-      <Link to={`/match/${match.id}`} className="block">{body}</Link>
-    ) : (
-      <div className="block">{body}</div>
-    );
-  }  
+      <div className="mt-1 flex items-center justify-between text-[11px] text-gray-500">
+        <span className="truncate">{match?.starts_at ? fmtDate(match.starts_at) : match?.venue || ""}</span>
+        {showScore ? (
+          <span className="tabular-nums font-semibold text-gray-700">
+            {homeScore} <span className="text-gray-400">x</span> {awayScore}
+          </span>
+        ) : null}
+      </div>
+    </div>
+  );
+
+  return match?.id ? (
+    <Link to={`/match/${match.id}`} className="block">{body}</Link>
+  ) : (
+    <div className="block">{body}</div>
+  );
+}
 
 function ListMatchCard({ match }) {
   const showScore = match?.status && match.status !== "scheduled";
@@ -223,7 +225,6 @@ function ListMatchCard({ match }) {
     </Link>
   );
 }
-
 
 // Ordena: Pontos ↓, Vitórias ↓, Saldo de Gols ↓, Gols Pró ↓, (fallback por id)
 function compareByPoints(a, b) {
@@ -314,19 +315,48 @@ function computeProvisionalSemis(standings, teamsById = {}) {
    Classificação (tabelas)
    ========================= */
 function StandingsTable({ standings, teamsById }) {
+  // Garante que todos os times dos grupos apareçam, mesmo zerados
   const groups = useMemo(() => {
+    // 1. Agrupa standings existentes
     const map = {};
     for (const r of standings || []) {
       const g = r.group_name || "-";
       if (!map[g]) map[g] = [];
       map[g].push(r);
     }
-    for (const g of Object.keys(map)) {
+    // 2. Descobre todos os grupos e times
+    const allGroups = new Set();
+    const teamsByGroup = {};
+    for (const tid in teamsById) {
+      const t = teamsById[tid];
+      const g = t.group_name || "-";
+      allGroups.add(g);
+      if (!teamsByGroup[g]) teamsByGroup[g] = [];
+      teamsByGroup[g].push(t);
+    }
+    // 3. Para cada grupo, adiciona linhas zeradas para times ausentes
+    for (const g of allGroups) {
+      const present = new Set((map[g] || []).map((r) => String(r.team_id)));
+      const missing = (teamsByGroup[g] || []).filter((t) => !present.has(String(t.id)));
+      const zeroRows = missing.map((t) => ({
+        group_name: g,
+        team_id: t.id,
+        team_name: t.name,
+        matches_played: 0,
+        wins: 0,
+        draws: 0,
+        losses: 0,
+        goals_for: 0,
+        goals_against: 0,
+        goal_difference: 0,
+        points: 0,
+      }));
+      map[g] = [...(map[g] || []), ...zeroRows];
       map[g].sort(compareByPoints);
       map[g] = map[g].map((row, i) => ({ ...row, rank: i + 1 }));
     }
     return map;
-  }, [standings]);
+  }, [standings, teamsById]);
 
   const groupKeys = Object.keys(groups).sort();
   if (groupKeys.length === 0) return <div className="text-xs text-gray-500">Sem dados de classificação.</div>;
@@ -436,38 +466,52 @@ export default function Futsal() {
 
   const loadTeams = useCallback(async (sid) => {
     try {
-      // 1) tenta por sport_id (se recebido)
+      // 1) tenta por sport_id (se recebido) — AGORA COM group_name
       if (sid) {
         const byId = await supabase
           .from("teams")
-          .select("id, name, logo_url, color")
+          .select("id, name, logo_url, color, group_name")
           .eq("sport_id", sid);
-  
+
         if (!byId.error && Array.isArray(byId.data) && byId.data.length > 0) {
           const map = {};
-          for (const t of byId.data) map[t.id] = { ...t, name: String(t.name ?? "—"), logo_url: normalizeLogo(t.logo_url) };
+          for (const t of byId.data) {
+            map[t.id] = {
+              ...t,
+              name: String(t.name ?? "—"),
+              logo_url: normalizeLogo(t.logo_url),
+              group_name: t.group_name ?? "-",
+            };
+          }
           setTeamsById(map);
           return;
         }
       }
-  
-      // 2) fallback por NOME (join inner)
+
+      // 2) fallback por NOME (join inner) — AGORA COM group_name
       const byName = await supabase
         .from("teams")
-        .select("id, name, logo_url, color, sport:sport_id!inner(name)")
+        .select("id, name, logo_url, color, group_name, sport:sport_id!inner(name)")
         .eq("sport.name", "Futsal");
-  
+
       if (byName.error) throw byName.error;
-  
+
       const map = {};
-      for (const t of byName.data || []) map[t.id] = { ...t, name: String(t.name ?? "—"), logo_url: normalizeLogo(t.logo_url) };
+      for (const t of byName.data || []) {
+        map[t.id] = {
+          ...t,
+          name: String(t.name ?? "—"),
+          logo_url: normalizeLogo(t.logo_url),
+          group_name: t.group_name ?? "-",
+        };
+      }
       setTeamsById(map);
     } catch (e) {
       console.error("Exceção loadTeams:", e);
       setTeamsById({});
     }
   }, []);
-  
+
   const loadStandings = useCallback(async (sid) => {
     try {
       // 1) VIEW por sport_id
@@ -478,13 +522,13 @@ export default function Futsal() {
           .eq("sport_id", sid)
           .order("group_name", { ascending: true, nullsFirst: true })
           .order("rank", { ascending: true });
-  
+
         if (!v.error && Array.isArray(v.data) && v.data.length > 0) {
           setStandings(v.data);
           return;
         }
       }
-  
+
       // 2) VIEW por NOME (join inner)
       const v2 = await supabase
         .from("standings_view")
@@ -492,13 +536,12 @@ export default function Futsal() {
         .eq("sport.name", "Futsal")
         .order("group_name", { ascending: true, nullsFirst: true })
         .order("rank", { ascending: true });
-  
+
       if (!v2.error && Array.isArray(v2.data) && v2.data.length > 0) {
-        // descarta a coluna embutida sport
         setStandings(v2.data.map(({ sport, ...r }) => r));
         return;
       }
-  
+
       // 3) TABELA por sport_id
       if (sid) {
         const j = await supabase
@@ -512,13 +555,13 @@ export default function Futsal() {
           .eq("sport_id", sid)
           .order("group_name", { ascending: true, nullsFirst: true })
           .order("rank", { ascending: true });
-  
+
         if (!j.error && Array.isArray(j.data) && j.data.length > 0) {
           setStandings(j.data.map((r) => ({ ...r, team_name: r.team?.name })));
           return;
         }
       }
-  
+
       // 4) TABELA por NOME (join inner)
       const j2 = await supabase
         .from("standings")
@@ -532,14 +575,14 @@ export default function Futsal() {
         .eq("sport.name", "Futsal")
         .order("group_name", { ascending: true, nullsFirst: true })
         .order("rank", { ascending: true });
-  
+
       const rows2 = (j2.data || []).map((r) => ({ ...r, team_name: r.team?.name }));
       setStandings(rows2);
     } catch (e) {
       console.error("Exceção loadStandings:", e);
       setStandings([]);
     }
-  }, []);  
+  }, []);
 
   const loadMatches = useCallback(async (sid) => {
     try {
@@ -556,7 +599,7 @@ export default function Futsal() {
             home_score, away_score
           `)
           .eq("sport_id", sid);
-  
+
         if (!verr && Array.isArray(vrows) && vrows.length) {
           rows = vrows.map((r) => ({
             id: r.id,
@@ -576,7 +619,7 @@ export default function Futsal() {
           }));
         }
       }
-  
+
       // Fallback: TABELA por NOME (join inner)
       if (!rows.length) {
         const { data: jrows, error: jerr } = await supabase
@@ -589,9 +632,9 @@ export default function Futsal() {
             sport:sport_id!inner(name)
           `)
           .eq("sport.name", "Futsal");
-  
+
         if (jerr) throw jerr;
-  
+
         rows = (jrows || []).map((m) => ({
           ...m,
           order_idx: m.order_idx ?? m.round ?? m.id,
@@ -599,18 +642,18 @@ export default function Futsal() {
           away: m.away ? { ...m.away, name: String(m.away.name ?? "A definir"), logo_url: normalizeLogo(m.away.logo_url) } : null,
         }));
       }
-  
+
       // Ordenação original
       const phaseRank = { grupos: 1, oitavas: 2, quartas: 3, semi: 4, "3lugar": 5, final: 6 };
       const ord = (x) => (Number.isFinite(Number(x?.order_idx)) ? Number(x.order_idx) : Number.MAX_SAFE_INTEGER);
       rows.sort((a, b) => (phaseRank[a.stage] ?? 99) - (phaseRank[b.stage] ?? 99) || ord(a) - ord(b));
-  
+
       setMatches(rows);
     } catch (e) {
       console.error("Exceção loadMatches:", e);
       setMatches([]);
     }
-  }, []);  
+  }, []);
 
   const loadAll = useCallback(
     async (sid, { skeleton = false } = {}) => {
@@ -641,28 +684,27 @@ export default function Futsal() {
       try { supabase.removeChannel(channelRef.current); } catch {}
       channelRef.current = null;
     }
-  const ch = supabase
-    .channel(`futsal-hub`)
-    .on(
-      "postgres_changes",
-      // se tiver sportId, mantenha o filtro; senão, sem filtro
-      sportId
-        ? { event: "*", schema: "public", table: "matches", filter: `sport_id=eq.${sportId}` }
-        : { event: "*", schema: "public", table: "matches" },
-      () => {
-        if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
-        refreshTimerRef.current = setTimeout(() => loadAll(sportId, { skeleton: false }), 200);
-      }
-    )
-    .on(
-      "postgres_changes",
-      { event: "*", schema: "public", table: "standings" },
-      () => {
-        if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
-        refreshTimerRef.current = setTimeout(() => loadAll(sportId, { skeleton: false }), 200);
-      }
-    )
-  .subscribe();
+    const ch = supabase
+      .channel(`futsal-hub`)
+      .on(
+        "postgres_changes",
+        sportId
+          ? { event: "*", schema: "public", table: "matches", filter: `sport_id=eq.${sportId}` }
+          : { event: "*", schema: "public", table: "matches" },
+        () => {
+          if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+          refreshTimerRef.current = setTimeout(() => loadAll(sportId, { skeleton: false }), 200);
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "standings" },
+        () => {
+          if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+          refreshTimerRef.current = setTimeout(() => loadAll(sportId, { skeleton: false }), 200);
+        }
+      )
+      .subscribe();
 
     channelRef.current = ch;
 
@@ -679,7 +721,13 @@ export default function Futsal() {
   }, [sportId, loadAll]);
 
   /* Derivações */
-  const hasGroups = useMemo(() => (standings?.length ? true : (matches || []).some((m) => !!m.group_name)), [standings, matches]);
+  const hasGroups = useMemo(() => {
+    if (standings?.length) return true;
+    if ((matches || []).some((m) => !!m.group_name)) return true;
+    if (Object.values(teamsById || {}).some((t) => !!t.group_name)) return true;
+    return false;
+  }, [standings, matches, teamsById]);
+
   const knockout = useMemo(() => extractKnockout(matches), [matches]);
 
   // Semifinais provisórias
@@ -687,14 +735,15 @@ export default function Futsal() {
     () => computeProvisionalSemis(standings, teamsById),
     [standings, teamsById]
   );
-  
   const semisToShow = knockout.semis?.length ? knockout.semis : provisionalSemis;
 
   const groupOptions = useMemo(() => {
     const set = new Set();
     (matches || []).forEach((m) => m.group_name && set.add(m.group_name));
+    (standings || []).forEach((r) => r.group_name && set.add(r.group_name));
+    Object.values(teamsById || {}).forEach((t) => t.group_name && set.add(t.group_name));
     return ["todos", ...Array.from(set).sort()];
-  }, [matches]);
+  }, [matches, standings, teamsById]);
 
   const stageOptions = useMemo(() => {
     const set = new Set();

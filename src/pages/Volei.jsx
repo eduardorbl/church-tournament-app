@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useRef, useState, useCallback } from "react"
 import { Link } from "react-router-dom";
 import { supabase } from "../supabaseClient";
 import TeamBadge from "../components/TeamBadge";
+import { HelpCircle } from "lucide-react";
 
 const SPORT_LABEL = "Vôlei";
 const SPORT_ICON = "🏐";
@@ -103,10 +104,14 @@ function TeamChip({ team, align = "left", badge = 28 }) {
     try { return String(n ?? "A definir"); } catch { return "A definir"; }
   })();
   const has = Boolean(team?.id);
+  const isPlaceholder = !has && displayName === "A definir";
   const content = (
     <>
       {align === "right" ? null : <TeamBadge team={{ ...(team || {}), name: displayName }} size={badge} />}
-      <span className={`truncate ${has ? "text-gray-900" : "text-gray-400"} ${align === "right" ? "text-right" : ""}`} title={displayName}>{displayName}</span>
+      <span className={`truncate ${has ? "text-gray-900" : "text-gray-400 flex items-center gap-1"} ${align === "right" ? "text-right" : ""}`} title={displayName}>
+        {displayName}
+        {isPlaceholder ? <HelpCircle className="inline-block ml-1 w-4 h-4 text-gray-400" /> : null}
+      </span>
       {align === "right" ? <TeamBadge team={{ ...(team || {}), name: displayName }} size={badge} /> : null}
     </>
   );
