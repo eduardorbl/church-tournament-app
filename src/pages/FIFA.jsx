@@ -114,7 +114,10 @@ function TeamChip({ team, align = "left", badge = 28 }) {
   const content = (
     <>
       {align === "right" ? null : <TeamBadge team={{ ...(team || {}), name: displayName }} size={badge} />}
-      <span className={`truncate ${has ? "text-gray-900" : "text-gray-400"} ${align === "right" ? "text-right" : ""}`} title={displayName}>
+      <span
+        className={`truncate max-w-[90px] break-words whitespace-normal ${has ? "text-gray-900" : "text-gray-400 flex items-center gap-1"} ${align === "right" ? "text-right" : ""}`}
+        title={displayName}
+      >
         {displayName}
       </span>
       {align === "right" ? <TeamBadge team={{ ...(team || {}), name: displayName }} size={badge} /> : null}
