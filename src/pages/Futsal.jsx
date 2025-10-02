@@ -908,10 +908,16 @@ export default function Futsal() {
               <h3 className="text-lg font-bold">Regulamento</h3>
               <div className="rounded-2xl border border-gray-200 bg-white p-4 text-sm text-gray-700 shadow-sm">
                 <ul className="list-disc space-y-1 pl-5">
-                  <li><strong>Duração:</strong> partidas com <strong>2 tempos</strong> (definidos pela organização).</li>
-                  <li><strong>Fase de grupos:</strong> vitória <strong>3 pts</strong>, empate <strong>1 pt</strong>, derrota <strong>0 pt</strong>; desempate por <strong>saldo de gols</strong> e depois <strong>gols pró</strong>.</li>
-                  <li><strong>Mata-mata:</strong> jogo único; em caso de empate, segue a regra da organização (ex.: prorrogação/pênaltis).</li>
-                  <li><strong>WO:</strong> atraso acima do tolerado pode resultar em <strong>WO</strong>.</li>
+                  <li><strong>Duração:</strong> partidas com <strong>10 minutos corridos</strong>.</li>
+                  <li><strong>Formato:</strong> fase de grupos (3 grupos de 3 equipes) e mata-mata.</li>
+                  <li><strong>Classificação (grupos):</strong> o 1º colocado de cada grupo e o melhor 2º colocado avançam para o mata-mata.</li>
+                  <li><strong>Desempate (grupos):</strong> saldo de gols.</li>
+                  <li><strong>Mata-mata:</strong> duas semifinais e uma final.</li>
+                  <li><strong>Semifinais:</strong> Vencedor do grupo A × Vencedor do grupo B; Vencedor do grupo C × Melhor 2º colocado.</li>
+                  <li><strong>Substituições:</strong> ilimitadas.</li>
+                  <li><strong>Desperdício de tempo:</strong> pode ser acrescido ao final do jogo, a critério do árbitro.</li>
+                  <li><strong>Goleiro-linha:</strong> permitido.</li>
+                  <li><strong>Expulsão:</strong> o time fica com um jogador a menos por 2 minutos ou até sofrer um gol.</li>
                 </ul>
               </div>
             </section>

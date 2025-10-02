@@ -896,11 +896,15 @@ export default function Pebolim() {
               <h3 className="text-lg font-bold">Regulamento</h3>
               <div className="rounded-2xl border border-gray-200 bg-white p-4 text-sm text-gray-700 shadow-sm">
                 <ul className="list-disc space-y-1 pl-5">
-                  <li><strong>Duração/placar:</strong> partidas em <strong>1 rodada de 4 gols</strong>.</li>
-                  <li><strong>Formato:</strong> fase de grupos (até <strong>8 grupos de 3</strong>) e mata-mata (quartas → semis → final). Se for direto no mata-mata, o hub começa pelo chaveamento.</li>
-                  <li><strong>Tabela de pontos:</strong> vitória <strong>3 pts</strong>, empate <strong>1 pt</strong>, derrota <strong>0 pt</strong>; desempate por <strong>saldo de gols</strong> e <strong>gols pró</strong>.</li>
-                  <li><strong>Mata-mata:</strong> jogos únicos; em caso de empate, regra da organização (ex.: gol de ouro).</li>
-                  <li><strong>WO:</strong> atraso acima do tolerado pode resultar em <strong>WO</strong>.</li>
+                  <li><strong>Duração:</strong> partidas em <strong>1 rodada de 4 gols</strong>.</li>
+                  <li><strong>Formato:</strong> fase de grupos (8 grupos de 3 duplas) e mata-mata.</li>
+                  <li><strong>Classificação (grupos):</strong> o 1º colocado de cada grupo avança para o mata-mata.</li>
+                  <li><strong>Desempate (grupos):</strong> saldo de gols.</li>
+                  <li><strong>Mata-mata:</strong> quatro quartas de final, duas semifinais e uma final.</li>
+                  <li><strong>Quartas de final:</strong> Vencedor do grupo A × Vencedor do grupo B = Vencedor 1; Vencedor do grupo C × Vencedor do grupo D = Vencedor 2; Vencedor do grupo E × Vencedor do grupo F = Vencedor 3; Vencedor do grupo G × Vencedor do grupo H = Vencedor 4.</li>
+                  <li><strong>Semifinais:</strong> Vencedor 1 × Vencedor 2; Vencedor 3 × Vencedor 4.</li>
+                  <li><strong>Duplas:</strong> não podem ser substituídas durante o torneio.</li>
+                  <li><strong>WO:</strong> em caso de não comparecimento de um ou mais integrantes, a dupla perde por WO. Atrasos de até 3 minutos são tolerados.</li>
                 </ul>
               </div>
             </section>

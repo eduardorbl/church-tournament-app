@@ -918,10 +918,15 @@ export default function Volei() {
               <h3 className="text-lg font-bold">Regulamento</h3>
               <div className="rounded-2xl border border-gray-200 bg-white p-4 text-sm text-gray-700 shadow-sm">
                 <ul className="list-disc space-y-1 pl-5">
-                  <li><strong>Vitória do jogo:</strong> por <strong>sets</strong>; se empatar em sets, desempata por <strong>pontos do placar</strong>.</li>
-                  <li><strong>Classificação (grupos):</strong> Pts (3 por vitória) ↓, SV ↓, SP ↑, saldo (PF−PA) ↓, PF ↓.</li>
-                  <li><strong>Duração/placar típico:</strong> um set a 15 (2 de vantagem) — ajuste conforme a organização.</li>
-                  <li><strong>Mata-mata:</strong> jogo único; empates seguem a regra da organização.</li>
+                  <li><strong>Duração:</strong> partidas com <strong>um set de 15 pontos</strong>.</li>
+                  <li><strong>Vitória:</strong> é necessário ter <strong>dois pontos de vantagem</strong> para vencer a partida.</li>
+                  <li><strong>Formato:</strong> fase de grupos (3 grupos de 3 equipes) e mata-mata.</li>
+                  <li><strong>Classificação (grupos):</strong> o 1º colocado de cada grupo e o melhor 2º colocado avançam para o mata-mata.</li>
+                  <li><strong>Desempate (grupos):</strong> confronto direto; se houver 3 empates, será utilizado o diferencial de pontos.</li>
+                  <li><strong>Mata-mata:</strong> duas semifinais e uma final.</li>
+                  <li><strong>Semifinais:</strong> Vencedor do grupo A × Vencedor do grupo B; Vencedor do grupo C × Melhor 2º colocado.</li>
+                  <li><strong>Substituições:</strong> ilimitadas.</li>
+                  <li><strong>Rodízio:</strong> obrigatório.</li>
                 </ul>
               </div>
             </section>
