@@ -179,6 +179,7 @@ function TeamSide({ team, align = "left", badgeSize = 48 }) {
         className={`block truncate text-base sm:text-lg font-semibold ${
           hasTeam ? "text-gray-900" : "text-gray-400"
         } ${align === "right" ? "text-right" : ""}`}
+        style={{ fontSize: "1rem", lineHeight: "1.2", wordBreak: "keep-all", whiteSpace: "nowrap" }}
         title={team?.name || "A definir"}
       >
         {team?.name || "A definir"}

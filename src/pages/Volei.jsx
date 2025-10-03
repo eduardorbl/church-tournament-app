@@ -109,11 +109,11 @@ function TeamChip({ team, align = "left", badge = 28 }) {
     <>
       {align === "right" ? null : <TeamBadge team={{ ...(team || {}), name: displayName }} size={badge} />}
       <span
-        className={`truncate max-w-[90px] break-words whitespace-normal ${has ? "text-gray-900" : "text-gray-400 flex items-center gap-1"} ${align === "right" ? "text-right" : ""}`}
+        className={`block truncate text-base sm:text-lg font-semibold ${has ? "text-gray-900" : "text-gray-400"} ${align === "right" ? "text-right" : ""}`}
+        style={{ fontSize: "1rem", lineHeight: "1.2", wordBreak: "keep-all", whiteSpace: "nowrap" }}
         title={displayName}
       >
         {displayName}
-        {isPlaceholder ? <HelpCircle className="inline-block ml-1 w-4 h-4 text-gray-400" /> : null}
       </span>
       {align === "right" ? <TeamBadge team={{ ...(team || {}), name: displayName }} size={badge} /> : null}
     </>
@@ -143,6 +143,15 @@ function BracketMatchCard({ match, placeholder }) {
         <div className="min-w-0 justify-self-start"><TeamChip team={home} /></div>
         <div className="justify-self-center text-xs text-gray-400">x</div>
         <div className="min-w-0 justify-self-end"><TeamChip team={away} align="right" /></div>
+      </div>
+      <div className="mt-1 flex items-center justify-center text-[17px] font-bold tabular-nums">
+        {showScore ? (
+          <span>
+            {homeScore} <span className="text-gray-400">x</span> {awayScore}
+          </span>
+        ) : (
+          <span className="text-xs text-gray-500">—</span>
+        )}
       </div>
       <div className="mt-1 flex items-center justify-between text-[11px] text-gray-500">
         <span className="truncate">{match?.starts_at ? fmtDate(match.starts_at) : match?.venue || ""}</span>
