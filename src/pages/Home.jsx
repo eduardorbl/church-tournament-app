@@ -33,6 +33,7 @@ const SPORT_LIST = [
 ];
 
 const STAGE_LABEL = {
+  r32: "PRÉ-OITAVAS",
   grupos: "GRUPOS",
   oitavas: "OITAVAS",
   quartas: "QUARTAS",

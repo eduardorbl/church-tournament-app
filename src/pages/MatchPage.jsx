@@ -12,6 +12,7 @@ const STATUS_LABEL = {
 };
 
 const STAGE_LABEL = {
+  r32: "Pré-oitavas",
   grupos: "Fase de grupos",
   oitavas: "Oitavas",
   quartas: "Quartas",

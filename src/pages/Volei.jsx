@@ -11,6 +11,7 @@ const LOGO_BUCKET = "team-logos";
 const tz = "America/Sao_Paulo";
 
 const STAGE_FRIENDLY = {
+  r32: "Pré-oitavas",
   grupos: "Grupos",
   oitavas: "Oitavas",
   quartas: "Quartas",
@@ -127,43 +128,57 @@ function TeamChip({ team, align = "left", badge = 28 }) {
 }
 
 function BracketMatchCard({ match, placeholder }) {
-  const home = match?.home || (placeholder?.home ? { name: placeholder.home } : null);
-  const away = match?.away || (placeholder?.away ? { name: placeholder.away } : null);
+  const resolvedHome = match?.home || (placeholder?.home ? { name: placeholder.home } : null);
+  const resolvedAway = match?.away || (placeholder?.away ? { name: placeholder.away } : null);
+  const home = resolvedHome?.id ? resolvedHome : { name: resolvedHome?.name || "A definir" };
+  const away = resolvedAway?.id ? resolvedAway : { name: resolvedAway?.name || "A definir" };
+
   const showScore = match && match.status !== "scheduled";
   const homeScore = Number(match?.home_score ?? 0);
   const awayScore = Number(match?.away_score ?? 0);
   const homeSets = Number(match?.meta?.home_sets ?? 0);
   const awaySets = Number(match?.meta?.away_sets ?? 0);
-  const hasSets = showScore && (homeSets > 0 || awaySets > 0);
+  const hasSetsValue = homeSets > 0 || awaySets > 0;
+  const shouldShowSets = hasSetsValue || showScore;
+
+  const ScoreToken = ({ label, value, visible }) => (
+    <div className="flex flex-col items-center justify-center rounded-lg border border-gray-200 bg-white px-2.5 py-1 shadow-inner">
+      <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">{label}</span>
+      <span className="text-lg font-bold leading-none text-gray-900 tabular-nums">{visible ? value : "-"}</span>
+    </div>
+  );
+
+  const ScoreRow = ({ team, align, sets, score }) => (
+    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
+      <div className={`${align === "right" ? "justify-self-end" : "justify-self-start"} min-w-0`}>
+        <TeamChip team={team} align={align} />
+      </div>
+      <div className="flex items-center gap-2">
+        {shouldShowSets ? <ScoreToken label="Sets" value={sets} visible={shouldShowSets} /> : null}
+        <ScoreToken label="Pontos" value={score} visible={showScore} />
+      </div>
+    </div>
+  );
 
   const body = (
     <div className="rounded-2xl border border-gray-200 bg-white p-3 shadow-sm transition hover:bg-gray-50">
       <TitleLine order_idx={match?.order_idx} stage={match?.stage} />
-      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
-        <div className="min-w-0 justify-self-start"><TeamChip team={home} /></div>
-        <div className="justify-self-center text-xs text-gray-400">x</div>
-        <div className="min-w-0 justify-self-end"><TeamChip team={away} align="right" /></div>
+      <div className="mt-2 rounded-xl border border-gray-100 bg-gray-50 px-3 py-3 space-y-3">
+        <ScoreRow team={home} align="left" sets={homeSets} score={homeScore} />
+        <div className="h-px bg-gray-200" />
+        <ScoreRow team={away} align="right" sets={awaySets} score={awayScore} />
       </div>
-      <div className="mt-1 flex items-center justify-center text-[17px] font-bold tabular-nums">
-        {showScore ? (
-          <span>
-            {homeScore} <span className="text-gray-400">x</span> {awayScore}
-          </span>
-        ) : (
-          <span className="text-xs text-gray-500">—</span>
-        )}
-      </div>
-      <div className="mt-1 flex items-center justify-between text-[11px] text-gray-500">
+      <div className="mt-2 flex items-center justify-between text-[11px] text-gray-500">
         <span className="truncate">{match?.starts_at ? fmtDate(match.starts_at) : match?.venue || ""}</span>
         {showScore ? (
-          <span className="tabular-nums font-semibold text-gray-700">
-            {hasSets ? <span className="mr-2">Sets {homeSets} <span className="text-gray-400">x</span> {awaySets}</span> : null}
-            {homeScore} <span className="text-gray-400">x</span> {awayScore}
+          <span className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-0.5 font-semibold text-gray-600">
+            Sets {homeSets} <span className="text-gray-400">x</span> {awaySets}
           </span>
         ) : null}
       </div>
     </div>
   );
+
   return match?.id ? <Link to={`/match/${match.id}`} className="block">{body}</Link> : body;
 }
 
@@ -214,9 +229,13 @@ function compareVolleySeed(a, b) {
 function computeProvisionalSemis(standings) {
   if (!Array.isArray(standings) || standings.length === 0) return [];
 
+  const rows = standings
+    .map((r) => ({ ...r, group_name: normGroup(r.group_name) }))
+    .filter((r) => r.group_name && r.group_name !== "-");
+
   const byGroup = new Map();
-  for (const r of standings) {
-    const g = r.group_name || "-";
+  for (const r of rows) {
+    const g = r.group_name;
     if (!byGroup.has(g)) byGroup.set(g, []);
     byGroup.get(g).push(r);
   }
@@ -224,9 +243,9 @@ function computeProvisionalSemis(standings) {
 
   const winners = [];
   const seconds = [];
-  for (const [g, rows] of byGroup) {
-    if (rows[0]) winners.push({ group: g, ...rows[0] });
-    if (rows[1]) seconds.push({ group: g, ...rows[1] });
+  for (const [g, groupRows] of byGroup) {
+    if (groupRows[0]) winners.push({ group: g, ...groupRows[0] });
+    if (groupRows[1]) seconds.push({ group: g, ...groupRows[1] });
   }
 
   winners.sort(compareVolleySeed);
@@ -354,6 +373,18 @@ const safeOrder = (r) => {
   return r.id;
 };
 
+const normGroup = (g) => {
+  if (!g) return "-";
+  const s = String(g)
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .trim()
+    .toUpperCase();
+  if (!s) return "-";
+  const m = s.match(/^GRUPO\s+([A-Z0-9]+)$/);
+  return m ? m[1] : s;
+};
+
 function computeStandingsFromMatchesVolley(matches, teamsById) {
   const rows = new Map();
   const key = (g, id) => `${g}::${id}`;
@@ -379,7 +410,7 @@ function computeStandingsFromMatchesVolley(matches, teamsById) {
   // 1) Seed: todo time que aparece em QUALQUER match entra zerado no grupo correto
   const teamIdsSeeded = new Set();
   for (const m of matches || []) {
-    const g = m?.group_name || "-";
+    const g = normGroup(m?.group_name) || "-";
     const hid = m?.home?.id;
     const aid = m?.away?.id;
     if (hid) { getRow(g, hid); teamIdsSeeded.add(hid); }
@@ -388,7 +419,7 @@ function computeStandingsFromMatchesVolley(matches, teamsById) {
   // 2) Acúmulo: só conta estatísticas para "finished"
   for (const m of matches || []) {
     if (m?.status !== "finished") continue;
-    const g = m?.group_name || "-";
+    const g = normGroup(m?.group_name) || "-";
     const hid = m?.home?.id;
     const aid = m?.away?.id;
     if (!hid || !aid) continue;
@@ -407,10 +438,13 @@ function computeStandingsFromMatchesVolley(matches, teamsById) {
     if (homeWin) { hr.wins++; hr.points += 3; ar.losses++; }
     else if (awayWin) { ar.wins++; ar.points += 3; hr.losses++; }
   }
-  // 3) Times cadastrados que não aparecem em match nenhum → grupo "-"
+  // 3) Completa apenas se soubermos o grupo; evita criar grupo "-" fantasma
   for (const id of Object.keys(teamsById || {})) {
-    if (!teamIdsSeeded.has(Number(id)) && !teamIdsSeeded.has(id)) {
-      getRow("-", id);
+    const numericId = Number(id);
+    if (teamIdsSeeded.has(numericId) || teamIdsSeeded.has(id)) continue;
+    const teamGroup = normGroup(teamsById[id]?.group_name);
+    if (teamGroup && teamGroup !== "-") {
+      getRow(teamGroup, id);
     }
   }
   const byGroup = {};
@@ -425,16 +459,6 @@ function computeStandingsFromMatchesVolley(matches, teamsById) {
   }
   return out;
 }
-
-// helper para normalizar grupo
-const normGroup = (g) => {
-  if (!g) return null;
-  const s = String(g)
-    .normalize("NFD").replace(/\p{Diacritic}/gu, "")
-    .trim().toUpperCase();
-  const m = s.match(/^GRUPO\s+([A-Z0-9]+)$/);
-  return m ? m[1] : s;
-};
 
 export default function Volei() {
   const [sportId, setSportId] = useState(null);
@@ -477,10 +501,16 @@ export default function Volei() {
     try {
       // 1) por sport_id (normal)
       if (sid) {
-        const byId = await supabase.from("teams").select("id, name, logo_url, color").eq("sport_id", sid);
+        const byId = await supabase.from("teams").select("id, name, logo_url, color, group_name").eq("sport_id", sid);
         if (!byId.error && Array.isArray(byId.data) && byId.data.length > 0) {
           const map = {};
-          for (const t of byId.data) map[t.id] = { ...t, name: String(t.name ?? "—"), logo_url: normalizeLogo(t.logo_url) };
+          for (const t of byId.data) {
+            map[t.id] = {
+              ...t,
+              name: String(t.name ?? "—"),
+              logo_url: normalizeLogo(t.logo_url),
+            };
+          }
           setTeamsById(map);
           teamsRef.current = map;
           return; // só retorna se achou times
@@ -489,12 +519,18 @@ export default function Volei() {
       // 2) fallback por NOME (join)
       const byName = await supabase
         .from("teams")
-        .select("id, name, logo_url, color, sport:sport_id!inner(name)")
+        .select("id, name, logo_url, color, group_name, sport:sport_id!inner(name)")
         .in("sport.name", SPORT_NAMES);
-  
+
       if (byName.error) throw byName.error;
       const map = {};
-      for (const t of byName.data || []) map[t.id] = { ...t, name: String(t.name ?? "—"), logo_url: normalizeLogo(t.logo_url) };
+      for (const t of byName.data || []) {
+        map[t.id] = {
+          ...t,
+          name: String(t.name ?? "—"),
+          logo_url: normalizeLogo(t.logo_url),
+        };
+      }
       setTeamsById(map);
       teamsRef.current = map; // mantém o ref sincronizado
     } catch (e) {
@@ -787,13 +823,17 @@ export default function Volei() {
   const semisToShow = knockout.semis?.length ? knockout.semis : provisionalSemis || [];
 
   const groupOptions = useMemo(() => {
-    const set = new Set(); (matches || []).forEach((m) => m.group_name && set.add(m.group_name));
+    const set = new Set();
+    (matches || []).forEach((m) => {
+      const g = normGroup(m.group_name);
+      if (g && g !== "-") set.add(g);
+    });
     return ["todos", ...Array.from(set).sort()];
   }, [matches]);
 
   const stageOptions = useMemo(() => {
     const set = new Set(); (matches || []).forEach((m) => m.stage && set.add(m.stage));
-    const order = ["grupos", "oitavas", "quartas", "semi", "3lugar", "final"];
+    const order = ["r32", "grupos", "oitavas", "quartas", "semi", "3lugar", "final"];
     const ordered = Array.from(set).sort((a, b) => (order.indexOf(a) + 100) - (order.indexOf(b) + 100));
     return ["todos", ...ordered];
   }, [matches]);
@@ -805,7 +845,7 @@ export default function Volei() {
     let arr = (matches || []).filter(
       (m) => m.status === "scheduled" && (groupsPending ? m.stage === "grupos" : true)
     );
-    if (groupFilter !== "todos") arr = arr.filter((m) => m.group_name === groupFilter);
+    if (groupFilter !== "todos") arr = arr.filter((m) => normGroup(m.group_name) === groupFilter);
     if (stageFilter !== "todos") arr = arr.filter((m) => m.stage === stageFilter);
     arr.sort((a, b) => (ts(a.starts_at) - ts(b.starts_at)) || ((a.order_idx ?? 1) - (b.order_idx ?? 1)));
     return arr;
@@ -842,10 +882,18 @@ export default function Volei() {
         ) : (
           <>
             {hasGroups && (
-              <section className="space-y-4">
-                <h3 className="text-lg font-bold">Tabela de classificação</h3>
-                <StandingsTable standings={standings} teamsById={teamsById} />
-              </section>
+              (() => {
+                const filteredStandings = (standings || []).filter(
+                  (r) => normGroup(r.group_name) !== "-"
+                );
+                if (!filteredStandings.length) return null;
+                return (
+                  <section className="space-y-4">
+                    <h3 className="text-lg font-bold">Tabela de classificação</h3>
+                    <StandingsTable standings={filteredStandings} teamsById={teamsById} />
+                  </section>
+                );
+              })()
             )}
 
             <section className="space-y-4">

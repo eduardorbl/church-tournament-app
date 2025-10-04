@@ -19,6 +19,7 @@ const LOGO_BUCKET = "team-logos";
 const tz = "America/Sao_Paulo";
 
 const STAGE_FRIENDLY = {
+  r32: "Pré-oitavas",
   grupos: "Grupos",
   oitavas: "Oitavas",
   quartas: "Quartas",
@@ -161,37 +162,46 @@ function ListMatchCard({ match }) {
 }
 
 function BracketMatchCard({ match, placeholder }) {
-  const home = match?.home || (placeholder?.home ? { name: placeholder.home } : null);
-  const away = match?.away || (placeholder?.away ? { name: placeholder.away } : null);
-  const homeName = home?.name || (placeholder?.home ?? "A definir");
-  const awayName = away?.name || (placeholder?.away ?? "A definir");
+  const resolvedHome = match?.home || (placeholder?.home ? { name: placeholder.home } : null);
+  const resolvedAway = match?.away || (placeholder?.away ? { name: placeholder.away } : null);
+  const home = resolvedHome?.id ? resolvedHome : { name: resolvedHome?.name || "A definir" };
+  const away = resolvedAway?.id ? resolvedAway : { name: resolvedAway?.name || "A definir" };
+
   const showScore = match && match.status !== "scheduled";
   const homeScore = Number(match?.home_score ?? 0);
   const awayScore = Number(match?.away_score ?? 0);
 
+  const ScoreToken = ({ value }) => (
+    <div className="flex flex-col items-center justify-center rounded-lg border border-gray-200 bg-white px-3 py-1 shadow-inner">
+      <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">Gols</span>
+      <span className="text-lg font-bold leading-none text-gray-900 tabular-nums">{showScore ? value : "-"}</span>
+    </div>
+  );
+
+  const ScoreRow = ({ team, align, score }) => (
+    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
+      <div className={`${align === "right" ? "justify-self-end" : "justify-self-start"} min-w-0`}>
+        <TeamChip team={team} align={align} />
+      </div>
+      <ScoreToken value={score} />
+    </div>
+  );
+
   const body = (
     <div className="rounded-2xl border border-gray-200 bg-white p-3 shadow-sm transition hover:bg-gray-50">
       <TitleLine order_idx={match?.order_idx} stage={match?.stage} />
-      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
-        <div className="min-w-0 justify-self-start">
-          <TeamChip team={home?.id ? home : { name: homeName }} />
-        </div>
-        <div className="justify-self-center text-xs text-gray-400">x</div>
-        <div className="min-w-0 justify-self-end">
-          <TeamChip team={away?.id ? away : { name: awayName }} align="right" />
-        </div>
+      <div className="mt-2 rounded-xl border border-gray-100 bg-gray-50 px-3 py-3 space-y-3">
+        <ScoreRow team={home} align="left" score={homeScore} />
+        <div className="h-px bg-gray-200" />
+        <ScoreRow team={away} align="right" score={awayScore} />
       </div>
-      <div className="mt-1 flex items-center justify-center text-[17px] font-bold tabular-nums">
+      <div className="mt-2 flex items-center justify-between text-[11px] text-gray-500">
+        <span className="truncate">{match?.starts_at ? fmtDate(match.starts_at) : match?.venue || ""}</span>
         {showScore ? (
-          <span>
+          <span className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-0.5 font-semibold text-gray-600">
             {homeScore} <span className="text-gray-400">x</span> {awayScore}
           </span>
-        ) : (
-          <span className="text-xs text-gray-500">—</span>
-        )}
-      </div>
-      <div className="mt-1 flex items-center justify-between text-[11px] text-gray-500">
-        <span className="truncate">{match?.starts_at ? fmtDate(match.starts_at) : match?.venue || ""}</span>
+        ) : null}
       </div>
     </div>
   );
@@ -199,9 +209,12 @@ function BracketMatchCard({ match, placeholder }) {
   return match?.id ? <Link to={`/match/${match.id}`} className="block">{body}</Link> : body;
 }
 
-// Ordena: Pontos ↓, Vitórias ↓, Saldo de Gols ↓, Gols Pró ↓, (fallback por id)
+// Pontuação: vitória=3, empate=1, derrota=0
+const calcPoints = (r) => 3 * Number(r.wins ?? 0) + Number(r.draws ?? 0);
+
+// Ordena: Pts ↓, Vitórias ↓, SG ↓, GP ↓, (fallback por id)
 function compareByPoints(a, b) {
-  const ap = Number(a.points ?? 0), bp = Number(b.points ?? 0);
+  const ap = calcPoints(a), bp = calcPoints(b);
   if (bp !== ap) return bp - ap;
 
   const aw = Number(a.wins ?? 0), bw = Number(b.wins ?? 0);
@@ -218,53 +231,68 @@ function compareByPoints(a, b) {
 }
 
 /* ── Classificação ─────────────────────────────────────────────────────────── */
-function StandingsTable({ standings, teamsById }) {
+function StandingsTable({ standings, teamsById, sportId }) {
   // Garante que todos os times dos grupos apareçam, mesmo zerados
   const groups = useMemo(() => {
-    // 1) Agrupa standings existentes
-    const map = {};
+    const normG = (g) => String(g ?? "-").trim().toUpperCase();
+
+    // 1) Mapa a partir de standings (fonte de verdade na UI)
+    const byGroup = {};
+    const presentAnywhere = new Set();
     for (const r of standings || []) {
-      const g = r.group_name || "-";
-      if (!map[g]) map[g] = [];
-      map[g].push(r);
+      const g = normG(r.group_name);
+      if (!byGroup[g]) byGroup[g] = [];
+      byGroup[g].push({ ...r, group_name: g });
+      presentAnywhere.add(String(r.team_id));
     }
 
-    // 2) Descobre todos os grupos a partir dos times (teamsById)
-    const allGroups = new Set();
+    // 2) Organiza times por group vindo de teamsById (para completar zeros)
     const teamsByGroup = {};
     for (const tid in teamsById) {
       const t = teamsById[tid];
-      const g = t.group_name || "-";
-      allGroups.add(g);
+      // se soubermos sportId, ignore times que pertencem a outro esporte
+      if (sportId && t && t.sport_id && String(t.sport_id) !== String(sportId)) continue;
+      const g = normG(t.group_name);
       if (!teamsByGroup[g]) teamsByGroup[g] = [];
       teamsByGroup[g].push(t);
     }
 
-    // 3) Para cada grupo, adiciona linhas zeradas para times ausentes
-    for (const g of allGroups) {
-      const present = new Set((map[g] || []).map((r) => String(r.team_id)));
-      const missing = (teamsByGroup[g] || []).filter((t) => !present.has(String(t.id)));
-      const zeroRows = missing.map((t) => ({
-        group_name: g,
-        team_id: t.id,
-        team_name: t.name,
-        matches_played: 0,
-        wins: 0,
-        draws: 0,
-        losses: 0,
-        goals_for: 0,
-        goals_against: 0,
-        goal_difference: 0,
-        points: 0,
-      }));
-      map[g] = [...(map[g] || []), ...zeroRows];
+    const allGroupKeys = Object.keys(byGroup).length ? Object.keys(byGroup) : Object.keys(teamsByGroup);
 
-      // Ordena e numera
-      map[g].sort(compareByPoints);
-      map[g] = map[g].map((row, i) => ({ ...row, rank: i + 1 }));
+    for (const g of allGroupKeys) {
+      const rows = byGroup[g] || [];
+      const extra = (teamsByGroup[g] || [])
+        .filter((t) => !presentAnywhere.has(String(t.id))) // evita duplicar times já presentes em standings
+        .map((t) => ({
+          group_name: g,
+          team_id: t.id,
+          team_name: t.name,
+          matches_played: 0,
+          wins: 0,
+          draws: 0,
+          losses: 0,
+          goals_for: 0,
+          goals_against: 0,
+          goal_difference: 0,
+        }));
+      const packed = [...rows, ...extra].sort(compareByPoints).map((row, i) => ({ ...row, rank: i + 1 }));
+      byGroup[g] = packed;
     }
 
-    return map;
+    return byGroup;
+  }, [standings, teamsById, sportId]);
+
+  // Aviso discreto de divergências entre teams.group_name e standings.group_name
+  const conflicts = useMemo(() => {
+    const m = new Map(); // team_id -> grupo vindo de standings
+    (standings || []).forEach((r) => m.set(String(r.team_id), String(r.group_name ?? "-")));
+    const c = [];
+    Object.values(teamsById || {}).forEach((t) => {
+      const sidG = m.get(String(t.id));
+      const teamG = String(t.group_name ?? "-");
+      if (sidG && sidG !== teamG) c.push({ id: t.id, name: t.name, teamG, sidG });
+    });
+    return c;
   }, [standings, teamsById]);
 
   const groupKeys = Object.keys(groups).sort();
@@ -272,6 +300,14 @@ function StandingsTable({ standings, teamsById }) {
 
   return (
     <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+      {conflicts.length ? (
+        <div className="md:col-span-3">
+          <div className="rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+            {conflicts.length} time(s) com grupo divergente entre <em>teams</em> e <em>standings</em>. A UI já ignora isso, mas vale ajustar no banco.
+          </div>
+        </div>
+      ) : null}
+
       {groupKeys.map((g) => (
         <div key={g} className="overflow-hidden rounded-2xl border bg-white shadow-sm">
           <div className="border-b bg-gray-50 px-3 py-2 text-sm font-semibold">Grupo {g}</div>
@@ -313,7 +349,7 @@ function StandingsTable({ standings, teamsById }) {
                     <td className="py-1 text-center">{row.goals_for}</td>
                     <td className="py-1 text-center">{row.goals_against}</td>
                     <td className="py-1 text-center">{row.goal_difference}</td>
-                    <td className="py-1 text-center font-semibold">{row.points}</td>
+                    <td className="py-1 text-center font-semibold">{calcPoints(row)}</td>
                   </tr>
                 );
               })}
@@ -325,7 +361,6 @@ function StandingsTable({ standings, teamsById }) {
     </div>
   );
 }
-
 
 /* ── Knockout helpers ──────────────────────────────────────────────────────── */
 function extractKnockout(matches) {
@@ -455,9 +490,8 @@ export default function Pebolim() {
 
   const loadTeams = useCallback(async (sid) => {
     try {
-      // 1) por sport_id
       if (sid) {
-        const byId = await supabase.from("teams").select("id, name, logo_url, color, group_name").eq("sport_id", sid);
+        const byId = await supabase.from("teams").select("id, name, logo_url, color, group_name, sport_id").eq("sport_id", sid);
         if (!byId.error && Array.isArray(byId.data) && byId.data.length) {
           const map = {};
           for (const t of byId.data) {
@@ -466,6 +500,7 @@ export default function Pebolim() {
               name: String(t.name ?? "—"),
               logo_url: normalizeLogo(t.logo_url),
               group_name: t.group_name ?? "-",
+              sport_id: t.sport_id ?? sid,
             };
           }
           setTeamsById(map);
@@ -473,25 +508,7 @@ export default function Pebolim() {
           return;
         }
       }
-      // 2) fallback por NOME
-      const byName = await supabase
-        .from("teams")
-        .select("id, name, logo_url, color, group_name, sport:sport_id!inner(name)")
-        .eq("sport.name", SPORT_LABEL);
-
-      if (byName.error) throw byName.error;
-
-      const map = {};
-      for (const t of byName.data || []) {
-        map[t.id] = {
-          ...t,
-          name: String(t.name ?? "—"),
-          logo_url: normalizeLogo(t.logo_url),
-          group_name: t.group_name ?? "-",
-        };
-      }
-      setTeamsById(map);
-      teamsRef.current = map;
+      setTeamsById({});
     } catch (e) {
       console.error("Exceção loadTeams:", e);
       setTeamsById({});
@@ -500,70 +517,39 @@ export default function Pebolim() {
 
   const loadStandings = useCallback(async (sid) => {
     try {
-      // 1) VIEW por sport_id
+      // 1) Sempre tenta pela VIEW, filtrando por sport_id (e selecionando sport_id!)
       if (sid) {
-        const v = await supabase
+        const { data, error } = await supabase
           .from("standings_view")
-          .select("group_name, rank, team_id, team_name, matches_played, wins, draws, losses, goals_for, goals_against, goal_difference, points")
-          .eq("sport_id", sid)
-          .order("group_name", { ascending: true, nullsFirst: true })
-          .order("rank", { ascending: true });
-
-        if (!v.error && Array.isArray(v.data) && v.data.length > 0) {
-          setStandings(v.data);
-          return;
-        }
-      }
-
-      // 2) VIEW por NOME
-      const v2 = await supabase
-        .from("standings_view")
-        .select("group_name, rank, team_id, team_name, matches_played, wins, draws, losses, goals_for, goals_against, goal_difference, points, sport:sport_id!inner(name)")
-        .eq("sport.name", SPORT_LABEL)
-        .order("group_name", { ascending: true, nullsFirst: true })
-        .order("rank", { ascending: true });
-
-      if (!v2.error && Array.isArray(v2.data) && v2.data.length > 0) {
-        setStandings(v2.data.map(({ sport, ...r }) => r));
-        return;
-      }
-
-      // 3) TABELA por sport_id
-      if (sid) {
-        const j = await supabase
-          .from("standings")
           .select(`
-            group_name, rank, team_id,
+            sport_id, group_name, rank, team_id, team_name,
             matches_played, wins, draws, losses,
-            goals_for, goals_against, goal_difference, points,
-            team:teams!standings_team_id_fkey(name)
+            goals_for, goals_against, goal_difference, points
           `)
           .eq("sport_id", sid)
           .order("group_name", { ascending: true, nullsFirst: true })
           .order("rank", { ascending: true });
 
-        if (!j.error && Array.isArray(j.data) && j.data.length > 0) {
-          setStandings(j.data.map((r) => ({ ...r, team_name: r.team?.name })));
+        if (error) throw error;
+        if (Array.isArray(data) && data.length > 0) {
+          setStandings(data);
           return;
         }
       }
 
-      // 4) TABELA por NOME
-      const j2 = await supabase
-        .from("standings")
+      // 2) Fallback simples: mesma VIEW sem filtro (filtra no cliente, se quiser)
+      const all = await supabase
+        .from("standings_view")
         .select(`
-          group_name, rank, team_id,
+          sport_id, group_name, rank, team_id, team_name,
           matches_played, wins, draws, losses,
-          goals_for, goals_against, goal_difference, points,
-          team:teams!standings_team_id_fkey(name),
-          sport:sport_id!inner(name)
-        `)
-        .eq("sport.name", SPORT_LABEL)
-        .order("group_name", { ascending: true, nullsFirst: true })
-        .order("rank", { ascending: true });
+          goals_for, goals_against, goal_difference, points
+        `);
 
-      const rows2 = (j2.data || []).map((r) => ({ ...r, team_name: r.team?.name }));
-      setStandings(rows2);
+      if (all.error) throw all.error;
+
+      const rows = Array.isArray(all.data) ? all.data : [];
+      setStandings(sid ? rows.filter(r => String(r.sport_id) === String(sid)) : rows);
     } catch (e) {
       console.error("Exceção loadStandings:", e);
       setStandings([]);
@@ -670,7 +656,8 @@ export default function Pebolim() {
   }, [loadSportId]);
 
   useEffect(() => {
-    // roda sempre: com sportId (por id) ou sem sportId (fallback por nome)
+    // aguarda o sportId existir para evitar fallback por nome que pode puxar times de outros esportes
+    if (!sportId) return;
     loadAll(sportId, { skeleton: true });
 
     // Realtime só quando tiver sportId (para filtrar por id)
@@ -681,7 +668,10 @@ export default function Pebolim() {
     if (sportId) {
       const onChange = () => {
         if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
-        refreshTimerRef.current = setTimeout(() => loadAll(sportId, { skeleton: false }), 400);
+        // Apenas recarrega standings e matches em realtime — NÃO recarrega teams (filter só na carga completa / F5)
+        refreshTimerRef.current = setTimeout(() => {
+          Promise.all([loadStandings(sportId), loadMatches(sportId)]).catch((e) => console.error(e));
+        }, 400);
       };
       const ch = supabase
         .channel(`pebolim-hub-${sportId}`)
@@ -725,7 +715,7 @@ export default function Pebolim() {
   const stageOptions = useMemo(() => {
     const set = new Set();
     (matches || []).forEach((m) => m.stage && set.add(m.stage));
-    const order = ["grupos", "oitavas", "quartas", "semi", "3lugar", "final"];
+    const order = ["r32", "grupos", "oitavas", "quartas", "semi", "3lugar", "final"];
     const ordered = Array.from(set).sort((a, b) => (order.indexOf(a) + 100) - (order.indexOf(b) + 100));
     return ["todos", ...ordered];
   }, [matches]);
@@ -785,7 +775,7 @@ export default function Pebolim() {
             {/* 1) CLASSIFICAÇÃO (sempre renderiza; mostra vazio se não houver dados) */}
             <section className="space-y-4">
               <h3 className="text-lg font-bold">Tabela de classificação</h3>
-              <StandingsTable standings={standings} teamsById={teamsById} />
+              <StandingsTable standings={standings} teamsById={teamsById} sportId={sportId} />
             </section>
 
             {/* 2) CHAVEAMENTO */}

@@ -20,16 +20,25 @@ export default function MatchCard({ match }) {
     const ids = [match.home_team_id, match.away_team_id].filter(Boolean);
     if (!ids.length) return;
 
-    const { data, error } = await supabase
-      .from('teams')
-      .select('id, name')
-      .in('id', ids);
+    // Query teams but restrict to the match.sport_id when present to avoid pulling teams from other sports
+    try {
+      let query = supabase
+        .from('teams')
+        .select('id, name, sport_id')
+        .in('id', ids);
 
-    if (!error && data) {
-      const home = data.find(t => t.id === match.home_team_id);
-      const away = data.find(t => t.id === match.away_team_id);
-      if (home) setHomeTeam(home);
-      if (away) setAwayTeam(away);
+      if (match.sport_id) query = query.eq('sport_id', match.sport_id);
+
+      const { data, error } = await query;
+
+      if (!error && data) {
+        const home = data.find(t => t.id === match.home_team_id);
+        const away = data.find(t => t.id === match.away_team_id);
+        if (home) setHomeTeam(home);
+        if (away) setAwayTeam(away);
+      }
+    } catch (e) {
+      console.error('loadTeams error:', e);
     }
   };
 

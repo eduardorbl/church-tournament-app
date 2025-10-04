@@ -14,6 +14,7 @@ const LOGO_BUCKET = "team-logos";
 const tz = "America/Sao_Paulo";
 
 const STAGE_FRIENDLY = {
+  r32: "Pré-oitavas",
   grupos: "Grupos",
   oitavas: "Oitavas",
   quartas: "Quartas",
@@ -160,46 +161,52 @@ function TeamChip({ team, align = "left", badge = 28 }) {
    Cartões
    ========================= */
 function BracketMatchCard({ match, placeholder }) {
-  const home = match?.home || (placeholder?.home ? { name: placeholder.home } : null);
-  const away = match?.away || (placeholder?.away ? { name: placeholder.away } : null);
-  const homeName = home?.name || placeholder?.home || "A definir";
-  const awayName = away?.name || placeholder?.away || "A definir";
+  const resolvedHome = match?.home || (placeholder?.home ? { name: placeholder.home } : null);
+  const resolvedAway = match?.away || (placeholder?.away ? { name: placeholder.away } : null);
+  const home = resolvedHome?.id ? resolvedHome : { name: resolvedHome?.name || "A definir" };
+  const away = resolvedAway?.id ? resolvedAway : { name: resolvedAway?.name || "A definir" };
+
   const showScore = match?.status && match.status !== "scheduled";
   const homeScore = Number(match?.home_score ?? 0);
   const awayScore = Number(match?.away_score ?? 0);
 
-  const body = (
+  const ScoreToken = ({ value }) => (
+    <div className="flex flex-col items-center justify-center rounded-lg border border-gray-200 bg-white px-3 py-1 shadow-inner">
+      <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">Gols</span>
+      <span className="text-lg font-bold leading-none text-gray-900 tabular-nums">{showScore ? value : "-"}</span>
+    </div>
+  );
+
+  const ScoreRow = ({ team, align, score }) => (
+    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3">
+      <div className={`${align === "right" ? "justify-self-end" : "justify-self-start"} min-w-0`}>
+        <TeamChip team={team} align={align} />
+      </div>
+      <ScoreToken value={score} />
+    </div>
+  );
+
+  const content = (
     <div className="rounded-2xl border border-gray-200 bg-white p-3 shadow-sm transition hover:bg-gray-50">
       <TitleLine order_idx={match?.order_idx} stage={match?.stage} />
-      <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3">
-        <div className="min-w-0 justify-self-start">
-          <TeamChip team={home?.id ? home : { name: homeName }} />
-        </div>
-        <div className="justify-self-center text-xs text-gray-400">x</div>
-        <div className="min-w-0 justify-self-end">
-          <TeamChip team={away?.id ? away : { name: awayName }} align="right" />
-        </div>
+      <div className="mt-2 rounded-xl border border-gray-100 bg-gray-50 px-3 py-3 space-y-3">
+        <ScoreRow team={home} align="left" score={homeScore} />
+        <div className="h-px bg-gray-200" />
+        <ScoreRow team={away} align="right" score={awayScore} />
       </div>
-      <div className="mt-1 flex items-center justify-center text-[17px] font-bold tabular-nums">
+      <div className="mt-2 flex items-center justify-between text-[11px] text-gray-500">
+        <span className="truncate">{match?.starts_at ? fmtDate(match.starts_at) : match?.venue || ""}</span>
         {showScore ? (
-          <span>
+          <span className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-white px-2 py-0.5 font-semibold text-gray-600">
             {homeScore} <span className="text-gray-400">x</span> {awayScore}
           </span>
-        ) : (
-          <span className="text-xs text-gray-500">—</span>
-        )}
-      </div>
-      <div className="mt-1 flex items-center justify-between text-[11px] text-gray-500">
-        <span className="truncate">{match?.starts_at ? fmtDate(match.starts_at) : match?.venue || ""}</span>
+        ) : null}
       </div>
     </div>
   );
 
-  return match?.id ? (
-    <Link to={`/match/${match.id}`} className="block">{body}</Link>
-  ) : (
-    <div className="block">{body}</div>
-  );
+  if (!match?.id) return <div className="block">{content}</div>;
+  return <Link to={`/match/${match.id}`} className="block">{content}</Link>;
 }
 
 function ListMatchCard({ match }) {
@@ -753,7 +760,7 @@ export default function Futsal() {
   const stageOptions = useMemo(() => {
     const set = new Set();
     (matches || []).forEach((m) => m.stage && set.add(m.stage));
-    const order = ["grupos", "oitavas", "quartas", "semi", "3lugar", "final"];
+    const order = ["r32", "grupos", "oitavas", "quartas", "semi", "3lugar", "final"];
     const ordered = Array.from(set).sort((a, b) => (order.indexOf(a) + 100) - (order.indexOf(b) + 100));
     return ["todos", ...ordered];
   }, [matches]);

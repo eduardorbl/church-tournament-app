@@ -159,9 +159,9 @@ export default function Matches() {
   };
 
   // Carrega partidas (sem filtrar por esporte no servidor para evitar mismatch de tipos)
-  const loadMatches = async () => {
+  const loadMatches = async ({ showSkeleton = false } = {}) => {
     if (!mountedRef.current) return;
-    setLoading(true);
+    if (showSkeleton) setLoading(true);
     try {
       let query = supabase
         .from("matches")
@@ -180,8 +180,14 @@ export default function Matches() {
       // Filtra status no servidor (é string, compatível)
       if (selectedStatus) query = query.eq("status", selectedStatus);
 
-      // Esconde slots vazios de mata-mata
-      query = query.or("group_name.not.is.null,and(home_team_id.not.is.null,away_team_id.not.is.null)");
+      // Mostrar grupos, todos jogos de pré-oitavas (r32) e mata-mata com ambos os times
+      query = query.or(
+        [
+          "group_name.not.is.null",
+          "stage.eq.r32",
+          "and(home_team_id.not.is.null,away_team_id.not.is.null)"
+        ].join(",")
+      );
 
       const { data, error } = await query;
       if (error) {
@@ -230,10 +236,12 @@ export default function Matches() {
           return orderValue(a) - orderValue(b);
         });
 
-        if (mountedRef.current) setMatches(sortedData);
+        if (mountedRef.current) {
+          setMatches(sortedData);
+        }
       }
     } finally {
-      if (mountedRef.current) setLoading(false);
+      if (mountedRef.current && showSkeleton) setLoading(false);
     }
   };
 
@@ -244,7 +252,7 @@ export default function Matches() {
       await ensureSession();
       await checkIsAdmin();
       await loadSports();
-      await loadMatches();
+      await loadMatches({ showSkeleton: true });
     };
     initialize();
 
@@ -260,7 +268,7 @@ export default function Matches() {
       await checkIsAdmin();
       if (session) {
         await loadSports();
-        await loadMatches();
+        await loadMatches({ showSkeleton: true });
       } else {
         setMatches([]);
       }
@@ -280,7 +288,7 @@ export default function Matches() {
   // Recarrega ao mudar filtros e assina realtime
   useEffect(() => {
     if (!mountedRef.current) return;
-    loadMatches();
+    loadMatches({ showSkeleton: false });
 
     // Realtime
     if (channelRef.current) {
@@ -292,7 +300,7 @@ export default function Matches() {
       .on("postgres_changes", { event: "*", schema: "public", table: "matches" }, () => {
         // pequeno debounce para lotes
         setTimeout(() => {
-          if (mountedRef.current) loadMatches();
+          if (mountedRef.current) loadMatches({ showSkeleton: false });
         }, 200);
       })
       .subscribe();
@@ -346,7 +354,7 @@ export default function Matches() {
 
       // Caso o realtime não venha
       setTimeout(() => {
-        if (mountedRef.current) loadMatches();
+        if (mountedRef.current) loadMatches({ showSkeleton: false });
       }, 600);
 
       return true;
@@ -617,7 +625,19 @@ export default function Matches() {
                   <div className="text-xs text-gray-500 flex flex-wrap items-center gap-1 sm:gap-2">
                     <span className="font-medium">{m.sport?.name}</span>
                     {m.group_name && <span>· Grupo {m.group_name}</span>}
-                    {m.stage && <span>· {m.stage === "semi" ? "Semifinal" : m.stage === "3lugar" ? "3º lugar" : m.stage}</span>}
+                    {m.stage && (
+                      <span>
+                        · {
+                          m.stage === "semi"
+                            ? "Semifinal"
+                            : m.stage === "3lugar"
+                            ? "3º lugar"
+                            : m.stage === "r32"
+                            ? "Pré-oitavas"
+                            : m.stage
+                        }
+                      </span>
+                    )}
                     {m.round && <span>· J{m.round}</span>}
                     {isLive && (
                       <span className="inline-flex items-center gap-1 text-[11px] font-medium text-gray-600">
@@ -809,54 +829,95 @@ function TeamDisplay({
   align = "left",
 }) {
   const right = align === "right";
+  const scoreLabel = typeof setPoints === "number" ? "Pontos do set" : "Pontos";
+  const scoreValue = typeof setPoints === "number" ? Number(setPoints || 0) : Number(score || 0);
+  const canEditSets = Boolean(onSetInc || onSetDec || onSetReset);
+  const ScorePill = ({ label, value }) => {
+    const display = Number.isFinite(value) ? value : "-";
+    return (
+      <div className="flex min-w-[70px] flex-col items-center justify-center rounded-lg border border-gray-200 bg-white px-2.5 py-1 shadow-inner">
+        <span className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">{label}</span>
+        <span className="text-lg font-bold leading-none text-gray-900 tabular-nums">{display}</span>
+      </div>
+    );
+  };
+
+  const actionWrapper = right ? "justify-end" : "justify-start";
+  const textAlign = right ? "text-right" : "text-left";
+
   return (
-    <div className={`border rounded p-3 space-y-3 ${right ? "" : ""}`}>
-      {/* Nome do time */}
-      <div className={`flex items-center gap-2 ${right ? "sm:justify-end" : ""}`}>
-        <TeamBadge team={team || { name: "A definir" }} size={24} />
-        <span className="text-sm font-medium truncate">{team?.name || "A definir"}</span>
+    <div className="rounded-2xl border border-gray-200 bg-gray-50/80 p-3 shadow-sm space-y-4">
+      <div className={`flex flex-wrap items-center justify-between gap-3 ${right ? "flex-row-reverse" : ""}`}>
+        <div className={`flex min-w-0 items-center gap-2 ${right ? "flex-row-reverse text-right" : ""}`}>
+          <TeamBadge team={team || { name: "A definir" }} size={28} />
+          <span className="text-sm font-medium truncate">{team?.name || "A definir"}</span>
+        </div>
+        <div className={`flex items-center gap-2 ${right ? "flex-row-reverse" : ""}`}>
+          {typeof sets === "number" ? <ScorePill label="Sets" value={Number(sets || 0)} /> : null}
+          <ScorePill label={scoreLabel} value={scoreValue} />
+        </div>
       </div>
 
-      {/* Sets (vôlei) */}
-      {typeof sets === "number" && (
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-gray-600">Sets:</span>
-            <span className="font-semibold text-sm tabular-nums">{sets}</span>
-          </div>
-          <div className="flex items-center gap-1">
-            <button onClick={onSetDec} disabled={disabled} className="flex-1 px-2 py-1 text-xs border rounded hover:bg-gray-100 disabled:opacity-50">-</button>
-            <button onClick={onSetInc} disabled={disabled} className="flex-1 px-2 py-1 text-xs border rounded hover:bg-gray-100 disabled:opacity-50">+</button>
+      {typeof sets === "number" ? (
+        <div className={`space-y-2 ${textAlign}`}>
+          <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">Controle de sets</span>
+          <div className={`flex flex-wrap gap-2 ${actionWrapper}`}>
             <button
+              type="button"
+              onClick={onSetDec}
+              disabled={disabled || !canEditSets}
+              className="flex h-9 w-9 items-center justify-center rounded-lg border border-gray-300 text-base font-semibold text-gray-700 transition hover:bg-gray-100 disabled:opacity-40"
+            >
+              -
+            </button>
+            <button
+              type="button"
+              onClick={onSetInc}
+              disabled={disabled || !canEditSets}
+              className="flex h-9 w-9 items-center justify-center rounded-lg border border-gray-300 text-base font-semibold text-gray-700 transition hover:bg-gray-100 disabled:opacity-40"
+            >
+              +
+            </button>
+            <button
+              type="button"
               onClick={onSetReset}
-              disabled={disabled}
-              className="px-2 py-1 text-xs bg-red-500 text-white rounded hover:bg-red-600 disabled:opacity-50"
+              disabled={disabled || !canEditSets}
+              className="flex items-center justify-center rounded-lg bg-red-500 px-3 py-1 text-xs font-semibold text-white transition hover:bg-red-600 disabled:opacity-40"
               title="Zerar sets"
             >
-              0
+              Zerar
             </button>
           </div>
         </div>
-      )}
+      ) : null}
 
-      {/* Pontos do set ou totais */}
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <span className="text-xs text-gray-600">
-            {typeof setPoints === "number" ? "Pontos do set:" : "Pontos:"}
-          </span>
-          <span className="font-bold text-lg tabular-nums">{typeof setPoints === "number" ? setPoints : Number(score || 0)}</span>
-        </div>
-        <div className="flex items-center gap-1">
-          <button onClick={onDec} disabled={disabled} className="flex-1 px-2 py-1 text-xs border rounded hover:bg-gray-100 disabled:opacity-50">-</button>
-          <button onClick={onInc} disabled={disabled} className="flex-1 px-2 py-1 text-xs border rounded hover:bg-gray-100 disabled:opacity-50">+</button>
+      <div className={`space-y-2 ${textAlign}`}>
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">{scoreLabel}</span>
+        <div className={`flex flex-wrap gap-2 ${actionWrapper}`}>
           <button
+            type="button"
+            onClick={onDec}
+            disabled={disabled}
+            className="flex h-9 w-9 items-center justify-center rounded-lg border border-gray-300 text-base font-semibold text-gray-700 transition hover:bg-gray-100 disabled:opacity-40"
+          >
+            -
+          </button>
+          <button
+            type="button"
+            onClick={onInc}
+            disabled={disabled}
+            className="flex h-9 w-9 items-center justify-center rounded-lg border border-gray-300 text-base font-semibold text-gray-700 transition hover:bg-gray-100 disabled:opacity-40"
+          >
+            +
+          </button>
+          <button
+            type="button"
             onClick={onReset}
             disabled={disabled}
-            className="px-2 py-1 text-xs bg-red-500 text-white rounded hover:bg-red-600 disabled:opacity-50"
+            className="flex items-center justify-center rounded-lg bg-red-500 px-3 py-1 text-xs font-semibold text-white transition hover:bg-red-600 disabled:opacity-40"
             title={typeof setPoints === "number" ? "Zerar pontos do set" : "Zerar pontos"}
           >
-            0
+            Zerar
           </button>
         </div>
       </div>
