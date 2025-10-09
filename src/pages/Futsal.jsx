@@ -24,6 +24,50 @@ const STAGE_FRIENDLY = {
 };
 const friendlyStage = (s) => (s ? STAGE_FRIENDLY[s] || s : "");
 
+const GROUP_STAGE_TOKENS = new Set([
+  "grupos",
+  "grupo",
+  "groups",
+  "group",
+  "group stage",
+  "group_stage",
+  "fase de grupos",
+  "fase-de-grupos",
+]);
+const FINISHED_STATUSES = new Set([
+  "finished",
+  "encerrado",
+  "finalizado",
+  "completed",
+  "complete",
+  "cancelado",
+  "cancelled",
+  "canceled",
+  "walkover",
+  "wo",
+]);
+const normalizeLower = (value) => {
+  if (value === null || value === undefined) return "";
+  return String(value)
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase()
+    .trim();
+};
+function isGroupStageMatch(match) {
+  if (!match) return false;
+  const stage = normalizeLower(match.stage);
+  if (stage) {
+    return GROUP_STAGE_TOKENS.has(stage);
+  }
+  const rawGroup = String(match?.group_name ?? "").trim();
+  if (!rawGroup || rawGroup === "-") return false;
+  if (/^grupo\s+/i.test(rawGroup)) return true;
+  if (/^[a-z0-9]$/i.test(rawGroup)) return true;
+  return false;
+}
+const isFinishedStatus = (status) => FINISHED_STATUSES.has(normalizeLower(status));
+
 function parseDateSafe(dt) {
   if (!dt) return null;
   if (dt instanceof Date) return isNaN(dt.getTime()) ? null : dt;
@@ -740,14 +784,25 @@ export default function Futsal() {
     return false;
   }, [standings, matches, teamsById]);
 
-  const knockout = useMemo(() => extractKnockout(matches), [matches]);
+  const groupStageFinished = useMemo(() => {
+    const groupMatches = (matches || []).filter(isGroupStageMatch);
+    if (!groupMatches.length) return true;
+    return groupMatches.every((m) => isFinishedStatus(m?.status));
+  }, [matches]);
 
-  // Semifinais provisórias
-  const provisionalSemis = useMemo(
-    () => computeProvisionalSemis(standings, teamsById),
-    [standings, teamsById]
-  );
-  const semisToShow = knockout.semis?.length ? knockout.semis : provisionalSemis;
+  const knockout = useMemo(() => extractKnockout(matches), [matches]);
+  const knockoutSemis = knockout.semis || [];
+
+  // Semifinais provisórias apenas após o término da fase de grupos
+  const provisionalSemis = useMemo(() => {
+    if (!groupStageFinished) return [];
+    return computeProvisionalSemis(standings, teamsById);
+  }, [groupStageFinished, standings, teamsById]);
+
+  const semisToShow = useMemo(() => {
+    if (knockoutSemis.length) return knockoutSemis;
+    return provisionalSemis;
+  }, [knockoutSemis, provisionalSemis]);
 
   const groupOptions = useMemo(() => {
     const set = new Set();
@@ -836,9 +891,15 @@ export default function Futsal() {
               ) : (
                 <div className="space-y-2">
                   <h4 className="text-sm font-semibold text-gray-700">Semifinais</h4>
+                  <p className="text-xs text-gray-500">
+                    {groupStageFinished
+                      ? "Aguardando definição oficial dos confrontos."
+                      : "Confrontos aparecem aqui assim que todos os jogos da fase de grupos terminarem."}
+                  </p>
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                    <BracketMatchCard placeholder={{ home: "A definir", away: "A definir" }} />
-                    <BracketMatchCard placeholder={{ home: "A definir", away: "A definir" }} />
+                    {Array.from({ length: 2 }).map((_, i) => (
+                      <BracketMatchCard key={`s-ph-${i}`} placeholder={{ home: "A definir", away: "A definir" }} />
+                    ))}
                   </div>
                 </div>
               )}
