@@ -217,18 +217,18 @@ export default function AdminTournaments() {
     setFlash(null);
     setConfirmGenerate(null);
     try {
-      // Limpa tudo existente
-      const { data: matches } = await supabase.from("matches").select("id").eq("sport_id", sportId);
-      const ids = (matches || []).map((m) => m.id);
-      if (ids.length) await supabase.from("match_events").delete().in("match_id", ids);
-      await supabase.from("matches").delete().eq("sport_id", sportId);
-      await supabase.from("standings").delete().eq("sport_id", sportId);
-
-      // Gera novas partidas na ORDEM fixa
       if (key === "fifa") {
-        const { error } = await supabase.rpc("fifa_generate_bracket_fixed");
+        const { error } = await supabase.rpc("admin_regenerate_fifa_fixed");
         if (error) throw error;
       } else {
+        // Limpa tudo existente
+        const { data: matches } = await supabase.from("matches").select("id").eq("sport_id", sportId);
+        const ids = (matches || []).map((m) => m.id);
+        if (ids.length) await supabase.from("match_events").delete().in("match_id", ids);
+        await supabase.from("matches").delete().eq("sport_id", sportId);
+        await supabase.from("standings").delete().eq("sport_id", sportId);
+
+        // Gera novas partidas na ORDEM fixa
         const variant = RULES[key]?.variant || "1v3_1v2_3v2";
         const { error } = await supabase.rpc("admin_generate_group_fixtures_3x3", {
           p_sport_id: sportId,
