@@ -226,7 +226,10 @@ export default function AdminTournaments() {
 
       // Gera novas partidas na ORDEM fixa
       if (key === "fifa") {
-        const { error } = await supabase.rpc("admin_generate_fifa_oitavas32", { p_sport_id: sportId });
+        const { error } = await supabase.rpc("fifa_seed_32_bracket", {
+          p_sport_name: "FIFA",   // esse RPC usa o nome
+          p_reset: false          // você já limpou antes
+        });
         if (error) throw error;
       } else {
         const variant = RULES[key]?.variant || "1v3_1v2_3v2";
