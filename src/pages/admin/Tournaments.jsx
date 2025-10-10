@@ -226,10 +226,7 @@ export default function AdminTournaments() {
 
       // Gera novas partidas na ORDEM fixa
       if (key === "fifa") {
-        const { error } = await supabase.rpc("fifa_seed_32_bracket", {
-          p_sport_name: "FIFA",   // esse RPC usa o nome
-          p_reset: false          // você já limpou antes
-        });
+        const { error } = await supabase.rpc("fifa_generate_bracket_fixed");
         if (error) throw error;
       } else {
         const variant = RULES[key]?.variant || "1v3_1v2_3v2";
@@ -351,7 +348,7 @@ export default function AdminTournaments() {
 
                   <GhostButton
                     className="text-red-600 border-red-600 hover:bg-red-50"
-                    disabled={busy[key] || (key !== "fifa" && !canGen)}
+                    disabled={busy[key] || (key === "fifa" ? !teamOk : !canGen)}
                     onClick={() => openGenerateConfirm(key)}
                   >
                     {busy[key] ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCw className="h-4 w-4" />}
