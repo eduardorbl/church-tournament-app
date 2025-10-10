@@ -218,8 +218,7 @@ export default function AdminTournaments() {
     setConfirmGenerate(null);
     try {
       if (key === "fifa") {
-        // mantém ordem existente; se quiser recriar do zero, passe { p_recreate: true }
-        const { error } = await supabase.rpc("fifa_generate_or_repair_bracket_fixed", { p_recreate: false });
+        const { error } = await supabase.rpc("fifa_preserve_order_and_reset_played", { p_reset_played: true });
         if (error) throw error;
       } else {
         // Limpa tudo existente
