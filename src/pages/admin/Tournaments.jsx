@@ -355,17 +355,6 @@ export default function AdminTournaments() {
                     Gerar Partidas (ordem fixa)
                   </GhostButton>
 
-                  {exists && (
-                    <GhostButton onClick={() => startFirstIfIdle(meta.sportId)}>
-                      <PlayCircle className="h-4 w-4" /> Iniciar primeiro (se parado)
-                    </GhostButton>
-                  )}
-                  {exists && (
-                    <GhostButton onClick={() => finishLiveAndStartNext(meta.sportId)}>
-                      <FastForward className="h-4 w-4" /> Finalizar ao vivo e iniciar próximo
-                    </GhostButton>
-                  )}
-
                   <GhostButton className="sm:col-span-2" onClick={() => openConfirm(key)} disabled={!exists}>
                     <Trash2 className="h-4 w-4" /> Apagar & Reiniciar
                   </GhostButton>

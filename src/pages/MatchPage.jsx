@@ -428,7 +428,22 @@ export default function MatchPage() {
       .on(
         "postgres_changes",
         { event: "*", schema: "public", table: "matches", filter: `id=eq.${id}` },
-        () => load()
+        (payload) => {
+          const row = payload?.new;
+          if (!row) return;
+          setMatch((prev) => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              status: row.status ?? prev.status,
+              starts_at: row.starts_at ?? prev.starts_at,
+              updated_at: row.updated_at ?? prev.updated_at,
+              home_score: typeof row.home_score === "number" ? row.home_score : prev.home_score,
+              away_score: typeof row.away_score === "number" ? row.away_score : prev.away_score,
+              meta: row.meta ?? prev.meta,
+            };
+          });
+        }
       )
       .on(
         "postgres_changes",
@@ -465,12 +480,15 @@ export default function MatchPage() {
   const hasAnySetValue = homeSets > 0 || awaySets > 0;
   const shouldShowSets = isVolei || hasAnySetValue;
 
+  const isLive = match?.status === "ongoing" || match?.status === "paused";
   // Placar somente quando != scheduled
   const shouldShowScore = match?.status && match.status !== "scheduled";
-  const homeScore = Number(match?.home_score ?? 0);
+  const homeScore = Number(match?.home_score ?? 0); // totais acumulados
   const awayScore = Number(match?.away_score ?? 0);
 
-  const isLive = match?.status === "ongoing" || match?.status === "paused";
+  const liveHomeSetPts = isVolei ? Number(match?.meta?.home_points_set ?? 0) : 0;
+  const liveAwaySetPts = isVolei ? Number(match?.meta?.away_points_set ?? 0) : 0;
+  const showLiveSetPts = isVolei && (isLive || liveHomeSetPts > 0 || liveAwaySetPts > 0);
 
   // ---- Renderização ----
   if (error) {
@@ -561,9 +579,12 @@ export default function MatchPage() {
             ) : null}
 
             {shouldShowScore ? (
-              <div className="text-4xl font-extrabold tabular-nums leading-none sm:text-5xl">
-                {homeScore} <span className="text-gray-400">x</span> {awayScore}
-              </div>
+              <>
+                <div className="text-4xl font-extrabold tabular-nums leading-none sm:text-5xl">
+                  {showLiveSetPts ? liveHomeSetPts : homeScore} <span className="text-gray-400">x</span>{" "}
+                  {showLiveSetPts ? liveAwaySetPts : awayScore}
+                </div>
+              </>
             ) : (
               <div className="text-sm text-gray-400">—</div>
             )}

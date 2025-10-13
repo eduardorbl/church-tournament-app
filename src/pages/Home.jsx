@@ -1,5 +1,5 @@
 // src/pages/Home.jsx
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { supabase } from "../supabaseClient";
 import TeamBadge from "../components/TeamBadge";
@@ -124,11 +124,14 @@ export default function Home() {
   const [now, setNow] = useState(Date.now());
   const mountedRef = useRef(true);
   const reloadingRef = useRef(false);
+  const blocksRef = useRef({});
 
   const load = async () => {
     if (reloadingRef.current) return;
     reloadingRef.current = true;
-    setLoading(true);
+    if (!Object.keys(blocksRef.current || {}).length) {
+      setLoading(true);
+    }
     setFlash(null);
 
     try {
@@ -269,7 +272,9 @@ export default function Home() {
         })
       );
 
-      setBlocks(Object.fromEntries(results));
+      const mapped = Object.fromEntries(results);
+      blocksRef.current = mapped;
+      setBlocks(mapped);
     } catch (e) {
       setFlash(`Falha ao carregar a Home: ${e.message || e}`);
     } finally {
@@ -277,6 +282,84 @@ export default function Home() {
       reloadingRef.current = false;
     }
   };
+
+  const patchMatchFromRealtime = useCallback((row) => {
+    if (!row?.id) return false;
+    let patched = false;
+    setBlocks((prev) => {
+      let changed = false;
+      const updatedBlocks = { ...prev };
+
+      for (const [key, block] of Object.entries(prev)) {
+        if (!block) continue;
+
+        let blockChanged = false;
+        let newDetails = block.details;
+        const currentDetail = block.details?.[row.id];
+
+        if (currentDetail) {
+          const patchedDetail = {
+            ...currentDetail,
+            status: row.status ?? currentDetail.status,
+            starts_at: row.starts_at ?? currentDetail.starts_at,
+            updated_at: row.updated_at ?? currentDetail.updated_at,
+            home_score:
+              typeof row.home_score === "number" ? row.home_score : currentDetail.home_score,
+            away_score:
+              typeof row.away_score === "number" ? row.away_score : currentDetail.away_score,
+            meta: row.meta ?? currentDetail.meta,
+            stage: row.stage ?? currentDetail.stage,
+            group_name: row.group_name ?? currentDetail.group_name,
+            order_idx: row.order_idx ?? currentDetail.order_idx,
+            venue: row.venue ?? currentDetail.venue,
+          };
+          newDetails = {
+            ...block.details,
+            [row.id]: patchedDetail,
+          };
+          blockChanged = true;
+        }
+
+        let newUpcoming = block.compactUpcoming;
+        if (Array.isArray(block.compactUpcoming) && block.compactUpcoming.length) {
+          let upcomingChanged = false;
+          const patchedUpcoming = block.compactUpcoming.map((m) => {
+            if (m.id !== row.id) return m;
+            upcomingChanged = true;
+            return {
+              ...m,
+              stage: row.stage ?? m.stage,
+              group_name: row.group_name ?? m.group_name,
+              order_idx: row.order_idx ?? m.order_idx,
+            };
+          });
+          if (upcomingChanged) {
+            newUpcoming = patchedUpcoming;
+            blockChanged = true;
+          }
+        }
+
+        if (blockChanged) {
+          updatedBlocks[key] = {
+            ...block,
+            details: newDetails,
+            compactUpcoming: newUpcoming,
+          };
+          changed = true;
+        }
+      }
+
+      if (changed) {
+        patched = true;
+        blocksRef.current = updatedBlocks;
+        return updatedBlocks;
+      }
+
+      return prev;
+    });
+
+    return patched;
+  }, []);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -288,7 +371,19 @@ export default function Home() {
     // realtime: mudanças em matches e match_events → recarrega
     const ch = supabase
       .channel("home-central")
-      .on("postgres_changes", { event: "*", schema: "public", table: "matches" }, () => mountedRef.current && load())
+      .on("postgres_changes", { event: "*", schema: "public", table: "matches" }, (payload) => {
+        if (!mountedRef.current) return;
+        const eventType = payload?.eventType || payload?.type;
+        const row = payload?.new;
+        if (eventType === "UPDATE" && row?.id) {
+          const handled = patchMatchFromRealtime(row);
+          if (!handled) {
+            load();
+          }
+        } else {
+          load();
+        }
+      })
       .on("postgres_changes", { event: "*", schema: "public", table: "match_events" }, () => mountedRef.current && load())
       .subscribe();
 
@@ -470,6 +565,10 @@ function LiveScoreRow({ match, now }) {
   const awayScore = Number(match?.away_score ?? 0);
   const homeSets = isVolei ? getVoleiSets(match, "home") : 0;
   const awaySets = isVolei ? getVoleiSets(match, "away") : 0;
+  const isLive = match?.status === "ongoing" || match?.status === "paused";
+  const liveHomeSetPts = isVolei ? Number(match?.meta?.home_points_set ?? 0) : 0;
+  const liveAwaySetPts = isVolei ? Number(match?.meta?.away_points_set ?? 0) : 0;
+  const showLiveSetPts = isVolei && (isLive || liveHomeSetPts > 0 || liveAwaySetPts > 0);
 
   return (
     <Link to={`/match/${match.id}`} className="block rounded-xl bg-white p-3 shadow-sm hover:bg-gray-50 relative overflow-hidden">
@@ -496,9 +595,12 @@ function LiveScoreRow({ match, now }) {
             </div>
           )}
           {showScore ? (
-            <div className="text-xl font-bold tabular-nums">
-              {homeScore} <span className="text-gray-400">x</span> {awayScore}
-            </div>
+            <>
+              <div className="text-xl font-bold tabular-nums">
+                {showLiveSetPts ? liveHomeSetPts : homeScore} <span className="text-gray-400">x</span>{" "}
+                {showLiveSetPts ? liveAwaySetPts : awayScore}
+              </div>
+            </>
           ) : (
             <div className="text-sm text-gray-400">—</div>
           )}

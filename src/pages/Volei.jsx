@@ -138,8 +138,14 @@ function BracketMatchCard({ match, placeholder }) {
   const awayScore = Number(match?.away_score ?? 0);
   const homeSets = Number(match?.meta?.home_sets ?? 0);
   const awaySets = Number(match?.meta?.away_sets ?? 0);
+  const isLive = match?.status === "ongoing" || match?.status === "paused";
+  const liveHomeSetPts = Number(match?.meta?.home_points_set ?? 0);
+  const liveAwaySetPts = Number(match?.meta?.away_points_set ?? 0);
   const hasSetsValue = homeSets > 0 || awaySets > 0;
   const shouldShowSets = hasSetsValue || showScore;
+  const pointsLabel = isLive ? "Pts (set)" : "Pontos";
+  const pointsHome = isLive ? liveHomeSetPts : homeScore;
+  const pointsAway = isLive ? liveAwaySetPts : awayScore;
 
   const ScoreToken = ({ label, value, visible }) => (
     <div className="flex flex-col items-center justify-center rounded-lg border border-gray-200 bg-white px-2.5 py-1 shadow-inner">
@@ -155,7 +161,7 @@ function BracketMatchCard({ match, placeholder }) {
       </div>
       <div className="flex items-center gap-2">
         {shouldShowSets ? <ScoreToken label="Sets" value={sets} visible={shouldShowSets} /> : null}
-        <ScoreToken label="Pontos" value={score} visible={showScore} />
+        <ScoreToken label={pointsLabel} value={score} visible={showScore} />
       </div>
     </div>
   );
@@ -164,9 +170,9 @@ function BracketMatchCard({ match, placeholder }) {
     <div className="rounded-2xl border border-gray-200 bg-white p-3 shadow-sm transition hover:bg-gray-50">
       <TitleLine order_idx={match?.order_idx} stage={match?.stage} />
       <div className="mt-2 rounded-xl border border-gray-100 bg-gray-50 px-3 py-3 space-y-3">
-        <ScoreRow team={home} align="left" sets={homeSets} score={homeScore} />
+        <ScoreRow team={home} align="left" sets={homeSets} score={pointsHome} />
         <div className="h-px bg-gray-200" />
-        <ScoreRow team={away} align="right" sets={awaySets} score={awayScore} />
+        <ScoreRow team={away} align="right" sets={awaySets} score={pointsAway} />
       </div>
       <div className="mt-2 flex items-center justify-between text-[11px] text-gray-500">
         <span className="truncate">{match?.starts_at ? fmtDate(match.starts_at) : match?.venue || ""}</span>
@@ -188,7 +194,12 @@ function ListMatchCard({ match }) {
   const awayScore = Number(match?.away_score ?? 0);
   const homeSets = Number(match?.meta?.home_sets ?? 0);
   const awaySets = Number(match?.meta?.away_sets ?? 0);
+  const isLive = match?.status === "ongoing" || match?.status === "paused";
+  const liveHomeSetPts = Number(match?.meta?.home_points_set ?? 0);
+  const liveAwaySetPts = Number(match?.meta?.away_points_set ?? 0);
   const hasSets = showScore && (homeSets > 0 || awaySets > 0);
+  const pointsHome = isLive ? liveHomeSetPts : homeScore;
+  const pointsAway = isLive ? liveAwaySetPts : awayScore;
   return (
     <Link to={`/match/${match.id}`} className="block rounded-xl border border-gray-200 bg-white p-3 shadow-sm transition hover:bg-gray-50">
       <TitleLine order_idx={match.order_idx} stage={match.stage} group_name={match.group_name} />
@@ -199,7 +210,7 @@ function ListMatchCard({ match }) {
             <>
               {hasSets ? <div className="text-[11px] font-medium tabular-nums text-gray-600 mb-0.5">Sets: {homeSets} <span className="text-gray-400">x</span> {awaySets}</div> : null}
               <div className="text-base font-bold tabular-nums">
-                {homeScore} <span className="text-gray-400">x</span> {awayScore}
+                {pointsHome} <span className="text-gray-400">x</span> {pointsAway}
               </div>
             </>
           ) : <span className="text-xs text-gray-500">—</span>}

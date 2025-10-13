@@ -115,10 +115,13 @@ function MatchCard({ match, currentTimestamp }) {
   const awaySets = Number(match?.meta?.away_sets ?? 0);
   const hasAnySetValue = homeSets > 0 || awaySets > 0;
   const shouldShowSetsRow = isVolei || hasAnySetValue;
+  const isLive = match?.status === "ongoing" || match?.status === "paused";
   const shouldShowScore = match?.status && match.status !== "scheduled";
   const homeScore = Number(match?.home_score ?? 0);
   const awayScore = Number(match?.away_score ?? 0);
-  const isLive = match?.status === "ongoing" || match?.status === "paused";
+  const liveHomeSetPts = isVolei ? Number(match?.meta?.home_points_set ?? 0) : 0;
+  const liveAwaySetPts = isVolei ? Number(match?.meta?.away_points_set ?? 0) : 0;
+  const showLiveSetPts = isVolei && (isLive || liveHomeSetPts > 0 || liveAwaySetPts > 0);
 
   const cardBorder = isLive 
     ? match.status === "ongoing" 
@@ -180,9 +183,11 @@ function MatchCard({ match, currentTimestamp }) {
           )}
           
           {shouldShowScore ? (
-            <div className="text-lg font-bold tabular-nums">
-              {homeScore} x {awayScore}
-            </div>
+            <>
+              <div className="text-lg font-bold tabular-nums">
+                {showLiveSetPts ? liveHomeSetPts : homeScore} x {showLiveSetPts ? liveAwaySetPts : awayScore}
+              </div>
+            </>
           ) : (
             <div className="text-sm text-gray-400">—</div>
           )}
