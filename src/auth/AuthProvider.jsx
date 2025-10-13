@@ -4,6 +4,7 @@ import { supabase } from "../supabaseClient";
 
 const AuthContext = createContext({
   session: null,
+  user: null,
   isAdmin: false,
   needsPasswordSetup: false,
   ready: false,
@@ -28,6 +29,8 @@ export function AuthProvider({ children }) {
   const mountedRef = useRef(true);
   const lastCheckId = useRef(0);
 
+  const hasPassword = (user) => user?.user_metadata?.password_set === true;
+
   useEffect(() => {
     mountedRef.current = true;
 
@@ -44,15 +47,15 @@ export function AuthProvider({ children }) {
 
         // 2) Aplica sessão e LIBERA a UI imediatamente
         setSession(initial);
+        setNeedsPasswordSetup(initial?.user ? !hasPassword(initial.user) : false);
         setReady(true);
         setLoading(false);
 
         // 3) Checa admin/flags de forma assíncrona (não bloqueia a UI)
         if (initial?.user?.id) {
-          void checkAdminAndFlags(initial);
+          void checkAdmin(initial);
         } else {
           setIsAdmin(false);
-          setNeedsPasswordSetup(false);
         }
       } catch (e) {
         console.error("Auth init error:", e);
@@ -72,8 +75,13 @@ export function AuthProvider({ children }) {
         setSession(newSession ?? null);
 
         // não trava a UI; checa admin/flags em paralelo
-        if (newSession?.user?.id) {
-          void checkAdminAndFlags(newSession);
+        if (newSession?.user) {
+          setNeedsPasswordSetup(!hasPassword(newSession.user));
+          if (newSession.user.id) {
+            void checkAdmin(newSession);
+          } else {
+            setIsAdmin(false);
+          }
         } else {
           setIsAdmin(false);
           setNeedsPasswordSetup(false);
@@ -87,8 +95,8 @@ export function AuthProvider({ children }) {
     };
   }, []);
 
-  // Checagem resiliente de admin/flags (não lança erro na UI)
-  const checkAdminAndFlags = async (sess) => {
+  // Checagem resiliente de admin (não lança erro na UI)
+  const checkAdmin = async (sess) => {
     const checkId = ++lastCheckId.current;
 
     try {
@@ -96,45 +104,19 @@ export function AuthProvider({ children }) {
       if (!userId) {
         if (mountedRef.current && checkId === lastCheckId.current) {
           setIsAdmin(false);
-          setNeedsPasswordSetup(false);
         }
         return;
       }
 
-      // Roda em paralelo; se uma falhar, seguimos com a outra
-      const [adminRes, profileRes] = await Promise.allSettled([
-        supabase.rpc("is_admin"),
-        supabase
-          .from("user_profiles")
-          .select("needs_password_setup")
-          .eq("user_id", userId)
-          .maybeSingle(),
-      ]);
-
-      let admin = false;
-      if (adminRes.status === "fulfilled") {
-        admin = Boolean(adminRes.value?.data);
-      } else {
-        console.warn("is_admin RPC falhou:", adminRes.reason);
-      }
-
-      let nps = false;
-      if (profileRes.status === "fulfilled") {
-        nps = Boolean(profileRes.value?.data?.needs_password_setup);
-      } else {
-        // se sua tabela/coluna não existir ou RLS bloquear, apenas loga
-        console.warn("Leitura de user_profiles falhou (ignorado):", profileRes.reason);
-      }
+      const { data, error } = await supabase.rpc("is_admin");
 
       if (mountedRef.current && checkId === lastCheckId.current) {
-        setIsAdmin(admin);
-        setNeedsPasswordSetup(nps);
+        setIsAdmin(Boolean(data) && !error);
       }
     } catch (e) {
-      console.error("checkAdminAndFlags error:", e);
+      console.error("checkAdmin error:", e);
       if (mountedRef.current && checkId === lastCheckId.current) {
         setIsAdmin(false);
-        setNeedsPasswordSetup(false);
       }
     }
   };
@@ -144,7 +126,8 @@ export function AuthProvider({ children }) {
     const result = await supabase.auth.signInWithPassword({ email, password });
     if (result.data?.session?.user?.id && !result.error) {
       setSession(result.data.session);
-      void checkAdminAndFlags(result.data.session);
+      setNeedsPasswordSetup(!hasPassword(result.data.session.user));
+      void checkAdmin(result.data.session);
     }
     return result;
   };
@@ -160,19 +143,17 @@ export function AuthProvider({ children }) {
     return { error };
   };
 
-  // Atualizar senha e marcar flag no perfil (se existir a tabela/coluna)
+  // Atualizar senha e marcar flag diretamente no user_metadata
   const updatePassword = async (newPassword) => {
-    const { data, error } = await supabase.auth.updateUser({ password: newPassword });
+    const { data, error } = await supabase.auth.updateUser({
+      password: newPassword,
+      data: { password_set: true },
+    });
 
-    if (!error && session?.user?.id) {
-      try {
-        await supabase
-          .from("user_profiles")
-          .upsert({ user_id: session.user.id, needs_password_setup: false });
-        setNeedsPasswordSetup(false);
-      } catch (err) {
-        console.warn("updatePassword: upsert user_profiles falhou (ignorado):", err);
-      }
+    if (!error) {
+      setNeedsPasswordSetup(false);
+      const { data: refreshed } = await supabase.auth.getSession();
+      setSession(refreshed?.session ?? null);
     }
 
     return { data, error };
@@ -184,7 +165,8 @@ export function AuthProvider({ children }) {
     const s = data?.session ?? null;
     setSession(s);
     if (s?.user?.id) {
-      void checkAdminAndFlags(s);
+      setNeedsPasswordSetup(!hasPassword(s.user));
+      void checkAdmin(s);
     } else {
       setIsAdmin(false);
       setNeedsPasswordSetup(false);
@@ -193,6 +175,7 @@ export function AuthProvider({ children }) {
 
   const value = {
     session,
+    user: session?.user ?? null,
     isAdmin,
     needsPasswordSetup,
     ready,
