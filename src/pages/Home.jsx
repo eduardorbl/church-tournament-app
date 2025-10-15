@@ -27,9 +27,9 @@ import {
 
 const SPORT_LIST = [
   { name: "Volei",  label: "Vôlei",   key: "volei",   callText: "⚠️ Compareçam à quadra de Vôlei:" },
+  { name: "FIFA",   label: "FIFA",    key: "fifa",    callText: "⚠️ Compareçam à área do console:" },
   { name: "Futsal", label: "Futsal",  key: "futsal",  callText: "⚠️ Compareçam à quadra de Futsal:" },
   { name: "Pebolim",label: "Pebolim", key: "pebolim", callText: "⚠️ Compareçam à mesa de pebolim:" },
-  { name: "FIFA",   label: "FIFA",    key: "fifa",    callText: "⚠️ Compareçam à área do console:" },
 ];
 
 const STAGE_LABEL = {
@@ -62,6 +62,14 @@ function publicLogoUrl(raw) {
     return data?.publicUrl || null;
   }
   return null;
+}
+
+function blockHasMatches(block) {
+  if (!block) return false;
+  const slots = block.slots || {};
+  const hasSlotMatch = ["live", "call", "next"].some((slot) => Boolean(slots?.[slot]?.match_id));
+  const hasUpcoming = Array.isArray(block.compactUpcoming) && block.compactUpcoming.length > 0;
+  return hasSlotMatch || hasUpcoming;
 }
 
 // Helpers de tempo para “Ao vivo”
@@ -395,10 +403,20 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const orderedKeys = useMemo(
-    () => SPORT_LIST.map((s) => s.key).filter((k) => blocks[k]),
-    [blocks]
-  );
+  const orderedKeys = useMemo(() => {
+    const baseOrder = new Map(SPORT_LIST.map((s, idx) => [s.key, idx]));
+    const keys = SPORT_LIST.map((s) => s.key).filter((k) => blocks[k]);
+    const decorated = keys.map((key) => ({
+      key,
+      index: baseOrder.get(key) ?? 0,
+      hasMatches: blockHasMatches(blocks[key]),
+    }));
+    decorated.sort((a, b) => {
+      if (a.hasMatches !== b.hasMatches) return a.hasMatches ? -1 : 1;
+      return a.index - b.index;
+    });
+    return decorated.map((d) => d.key);
+  }, [blocks]);
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-6 sm:py-8">
@@ -452,6 +470,7 @@ function SportBlock({ block, now }) {
   const live = slots?.live?.match_id ? details?.[slots.live.match_id] : null;
   const call = slots?.call?.match_id ? details?.[slots.call.match_id] : null;
   const next = slots?.next?.match_id ? details?.[slots.next.match_id] : null;
+  const hasMatches = blockHasMatches(block);
 
   return (
     <div className="rounded-2xl border border-gray-200 bg-white shadow-sm">
@@ -461,87 +480,96 @@ function SportBlock({ block, now }) {
         </div>
       </div>
 
-      {/* Ao vivo */}
-      <div className="px-4 sm:px-5">
-        <div className="rounded-xl border border-red-200 bg-red-50 p-4">
-          <div className="mb-2 flex items-center justify-between">
-            <div className="flex items-center gap-2 text-sm font-medium text-red-800">
-              <PlayCircle className="h-4 w-4" />
+      {hasMatches ? (
+        <>
+          {/* Ao vivo */}
+          <div className="px-4 sm:px-5">
+            <div className="rounded-xl border border-red-200 bg-red-50 p-4">
+              <div className="mb-2 flex items-center justify-between">
+                <div className="flex items-center gap-2 text-sm font-medium text-red-800">
+                  <PlayCircle className="h-4 w-4" />
+                  {live ? (
+                    <Link to={`/match/${live.id}`} className="hover:underline">
+                      {live.status === "paused" ? "Pausado" : "Ao vivo"} — Jogo {live.order_idx}
+                      {live.group_name ? ` • Grupo ${live.group_name}` : ""}
+                    </Link>
+                  ) : (
+                    <span>Ao vivo</span>
+                  )}
+                </div>
+                {live?.stage ? (
+                  <StagePill stage={live.stage} />
+                ) : (
+                  <span className="text-xs text-red-700/70">Aguardando…</span>
+                )}
+              </div>
+
               {live ? (
-                <Link to={`/match/${live.id}`} className="hover:underline">
-                  {live.status === "paused" ? "Pausado" : "Ao vivo"} — Jogo {live.order_idx}
-                  {live.group_name ? ` • Grupo ${live.group_name}` : ""}
-                </Link>
+                <LiveScoreRow match={live} now={now} />
               ) : (
-                <span>Ao vivo</span>
+                <div className="text-sm text-gray-600">Nenhuma partida ao vivo no momento.</div>
               )}
             </div>
-            {live?.stage ? (
-              <StagePill stage={live.stage} />
-            ) : (
-              <span className="text-xs text-red-700/70">Aguardando…</span>
-            )}
           </div>
 
-          {live ? (
-            <LiveScoreRow match={live} now={now} />
-          ) : (
-            <div className="text-sm text-gray-600">Nenhuma partida ao vivo no momento.</div>
-          )}
-        </div>
-      </div>
+          {/* Fila: Próxima (⚠️) e Seguinte */}
+          <div className="px-4 pb-4 sm:px-5 sm:pb-5">
+            <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+              <QueueCard
+                tone="amber"
+                icon={<Megaphone className="h-4 w-4" />}
+                title="Próxima partida"
+                subtitle={callText}
+                match={call}
+              />
+              <QueueCard
+                tone="emerald"
+                icon={<ChevronsRight className="h-4 w-4" />}
+                title="Jogo seguinte"
+                subtitle="Na sequência:"
+                match={next}
+              />
+            </div>
+          </div>
 
-      {/* Fila: Próxima (⚠️) e Seguinte */}
-      <div className="px-4 pb-4 sm:px-5 sm:pb-5">
-        <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
-          <QueueCard
-            tone="amber"
-            icon={<Megaphone className="h-4 w-4" />}
-            title="Próxima partida"
-            subtitle={callText}
-            match={call}
-          />
-          <QueueCard
-            tone="emerald"
-            icon={<ChevronsRight className="h-4 w-4" />}
-            title="Jogo seguinte"
-            subtitle="Na sequência:"
-            match={next}
-          />
-        </div>
-      </div>
-
-      {/* Compacto: mais agendados (opcional, aparece só se houver) */}
-      {compactUpcoming?.length ? (
-        <div className="border-t px-4 py-3 sm:px-5">
-          <div className="mb-2 text-sm font-semibold text-gray-800">Agendados (próximos)</div>
-          <div className="grid grid-cols-1 gap-2">
-          {compactUpcoming.map((u) => (
-            <Link
-              key={u.id}
-              to={`/match/${u.id}`}
-              className="flex items-center justify-between rounded-lg border bg-gray-50 px-3 py-2 hover:bg-gray-100"
-            >
-              <div className="min-w-0">
-                <div className="truncate text-sm font-medium text-gray-900">
-                  Jogo {u.order_idx}
-                  {u.group_name ? ` • Grupo ${u.group_name}` : ""}
-                </div>
-                <div className="mt-1 flex items-center gap-2 text-xs text-gray-700">
-                  <TeamWithName team={u.home} size={20} allowLink={false} />
-                  <span className="text-gray-400">x</span>
-                  <TeamWithName team={u.away} size={20} align="right" allowLink={false} />
-                </div>
+          {/* Compacto: mais agendados (opcional, aparece só se houver) */}
+          {compactUpcoming?.length ? (
+            <div className="border-t px-4 py-3 sm:px-5">
+              <div className="mb-2 text-sm font-semibold text-gray-800">Agendados (próximos)</div>
+              <div className="grid grid-cols-1 gap-2">
+                {compactUpcoming.map((u) => (
+                  <Link
+                    key={u.id}
+                    to={`/match/${u.id}`}
+                    className="flex items-center justify-between rounded-lg border bg-gray-50 px-3 py-2 hover:bg-gray-100"
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium text-gray-900">
+                        Jogo {u.order_idx}
+                        {u.group_name ? ` • Grupo ${u.group_name}` : ""}
+                      </div>
+                      <div className="mt-1 flex items-center gap-2 text-xs text-gray-700">
+                        <TeamWithName team={u.home} size={20} allowLink={false} />
+                        <span className="text-gray-400">x</span>
+                        <TeamWithName team={u.away} size={20} align="right" allowLink={false} />
+                      </div>
+                    </div>
+                    <div className="ml-3 shrink-0">
+                      <StagePill stage={u.stage} />
+                    </div>
+                  </Link>
+                ))}
               </div>
-              <div className="ml-3 shrink-0">
-                <StagePill stage={u.stage} />
-              </div>
-            </Link>
-          ))}
-
+            </div>
+          ) : null}
+        </>
+      ) : (
+        <div className="px-4 pb-5 sm:px-5">
+          <div className="rounded-xl border border-red-400 bg-red-100 px-4 py-6 text-center text-sm font-semibold text-red-800">
+            Nenhum jogo agendado dessa modalidade
           </div>
         </div>
-      ) : null}
+      )}
     </div>
   );
 }
