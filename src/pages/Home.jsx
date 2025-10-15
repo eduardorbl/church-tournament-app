@@ -26,10 +26,10 @@ import {
  */
 
 const SPORT_LIST = [
-  { name: "Volei",  label: "Vôlei",   key: "volei",   callText: "⚠️ Compareçam à quadra de Vôlei:" },
-  { name: "FIFA",   label: "FIFA",    key: "fifa",    callText: "⚠️ Compareçam à área do console:" },
-  { name: "Futsal", label: "Futsal",  key: "futsal",  callText: "⚠️ Compareçam à quadra de Futsal:" },
-  { name: "Pebolim",label: "Pebolim", key: "pebolim", callText: "⚠️ Compareçam à mesa de pebolim:" },
+  { name: "Volei", label: "Vôlei", key: "volei", callText: "⚠️ Compareçam à quadra de Vôlei:" },
+  { name: "FIFA", label: "FIFA", key: "fifa", callText: "⚠️ Compareçam à área do console:" },
+  { name: "Futsal", label: "Futsal", key: "futsal", callText: "⚠️ Compareçam à quadra de Futsal:" },
+  { name: "Pebolim", label: "Pebolim", key: "pebolim", callText: "⚠️ Compareçam à mesa de pebolim:" },
 ];
 
 const STAGE_LABEL = {
