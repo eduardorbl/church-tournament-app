@@ -23,6 +23,8 @@ export default function AdminRosters() {
   // extras
   const [playerCountByTeam, setPlayerCountByTeam] = useState({});
   const [koConfiguredBySport, setKoConfiguredBySport] = useState({});
+  const [renamingId, setRenamingId] = useState(null);
+  const [renameValue, setRenameValue] = useState("");
 
   // ------- loaders -----------------------------------------------------------
   const loadSports = async () => {
@@ -186,6 +188,9 @@ export default function AdminRosters() {
         setSelectedTeam(null);
         setPlayers([]);
       }
+      if (renamingId === team.id) {
+        cancelRename();
+      }
       await loadTeams();
 
       alert(
@@ -193,6 +198,48 @@ export default function AdminRosters() {
       );
     } catch (err) {
       alert("Erro ao remover: " + err.message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const startRename = (team) => {
+    if (busy) return;
+    setRenamingId(team.id);
+    setRenameValue(team.name);
+  };
+
+  const cancelRename = () => {
+    setRenamingId(null);
+    setRenameValue("");
+  };
+
+  const saveRename = async () => {
+    const teamId = renamingId;
+    const newName = renameValue.trim();
+    if (!teamId) return;
+    if (!newName) {
+      alert("O nome não pode ficar vazio.");
+      return;
+    }
+    const current = teams.find((t) => t.id === teamId);
+    if (current && current.name === newName) {
+      cancelRename();
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const { error } = await supabase.from("teams").update({ name: newName }).eq("id", teamId);
+      if (error) throw error;
+
+      setTeams((prev) => prev.map((t) => (t.id === teamId ? { ...t, name: newName } : t)));
+      if (selectedTeam?.id === teamId) {
+        setSelectedTeam((prev) => (prev ? { ...prev, name: newName } : prev));
+      }
+      cancelRename();
+    } catch (e) {
+      alert("Erro ao renomear: " + e.message);
     } finally {
       setBusy(false);
     }
@@ -540,6 +587,49 @@ export default function AdminRosters() {
                         🗑️ Remover
                       </button>
                     </div>
+                    {renamingId !== t.id ? (
+                      <div className="mt-2">
+                        <button
+                          className="px-3 py-2 rounded-lg border border-yellow-300 text-yellow-700 hover:bg-yellow-50 font-medium transition-colors text-sm"
+                          onClick={() => startRename(t)}
+                          disabled={busy}
+                        >
+                          ✏️ Renomear
+                        </button>
+                      </div>
+                    ) : (
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          saveRename();
+                        }}
+                        className="mt-2 flex gap-2 items-center"
+                      >
+                        <input
+                          className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                          value={renameValue}
+                          onChange={(e) => setRenameValue(e.target.value)}
+                          placeholder="Novo nome do time"
+                          maxLength={60}
+                          disabled={busy}
+                        />
+                        <button
+                          type="submit"
+                          className="px-3 py-2 rounded-lg border border-green-300 text-green-700 hover:bg-green-50 font-medium text-sm"
+                          disabled={busy}
+                        >
+                          Salvar
+                        </button>
+                        <button
+                          type="button"
+                          className="px-3 py-2 rounded-lg border border-gray-300 text-gray-700 hover:bg-gray-50 font-medium text-sm"
+                          onClick={cancelRename}
+                          disabled={busy}
+                        >
+                          Cancelar
+                        </button>
+                      </form>
+                    )}
                   </div>
                 </div>
               );
