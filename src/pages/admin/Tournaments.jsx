@@ -138,10 +138,10 @@ export default function AdminTournaments() {
           const standingsCount = standingsRes?.count ?? 0;
           const groupsMeta = summarizeGroups(groupsRes?.data || []);
 
-          // Slots (live / call / next) a partir da view v_queue_slots
+          // Slots (live / call / next) a partir da view v_queue_slots_v2
           const { data: slots } = await supabase
-            .from("v_queue_slots")
-            .select("slot, order_idx, match_id, stage, group_name")
+            .from("v_queue_slots_v2")
+            .select("slot, lane_idx, lane_code, order_idx, match_id, stage, group_name")
             .eq("sport_id", s.id);
 
           // Detalhes (nomes) das partidas presentes nos slots
@@ -269,13 +269,25 @@ export default function AdminTournaments() {
     }
   };
 
-  // Ações de arena (opcionais; úteis para operar a fila)
-  const startFirstIfIdle = async (sportId) => {
-    await supabase.rpc("admin_start_first_if_idle", { p_sport_id: sportId });
+  // Ações de arena (seguras, respeitam capacidade)
+  const startFillUntilCapacity = async (sportId, limit = null) => {
+    try {
+      const params = { p_sport_id: sportId };
+      if (limit) params.p_limit = limit;
+      const { error } = await supabase.rpc("admin_start_fill_until_capacity", params);
+      if (error) throw error;
+      setFlash("Partidas iniciadas com sucesso.");
+      await load();
+    } catch (e) {
+      setFlash(`Erro ao iniciar partidas: ${e.message || e}`);
+    }
   };
-  const finishLiveAndStartNext = async (sportId) => {
-    await supabase.rpc("admin_finish_live_and_start_next", { p_sport_id: sportId });
-  };
+
+  // Inicia todas as partidas possíveis até a capacidade
+  const startAll = async (sportId) => await startFillUntilCapacity(sportId);
+
+  // Inicia apenas uma partida (mais conservador)
+  const startOne = async (sportId) => await startFillUntilCapacity(sportId, 1);
 
   // --------- Render ---------
   return (
@@ -364,9 +376,9 @@ export default function AdminTournaments() {
                 <div className="px-4 pb-4 sm:px-5 sm:pb-5">
                   <div className="rounded-xl border border-gray-200">
                     <div className="grid grid-cols-1 divide-y sm:grid-cols-3 sm:divide-x sm:divide-y-0">
-                      {renderSlot(meta, "live")}
-                      {renderSlot(meta, "call")}
-                      {renderSlot(meta, "next")}
+      {renderSlotMulti(meta, "live")}
+      {renderSlotMulti(meta, "call")}
+      {renderSlotMulti(meta, "next")}
                     </div>
                   </div>
                 </div>
@@ -480,6 +492,66 @@ function renderSlot(meta, slot) {
             {data?.stage ? <span className="mr-2">{data.stage}</span> : null}
             {data?.group_name ? <span>Grupo {data.group_name}</span> : null}
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function renderSlotMulti(meta, slot) {
+  const label = slot === "live" ? "Ao vivo" : slot === "call" ? "⚠️ Compareçam" : "Próximo jogo";
+  const cls =
+    slot === "live"
+      ? "bg-red-50 border-red-200"
+      : slot === "call"
+      ? "bg-amber-50 border-amber-200"
+      : "bg-emerald-50 border-emerald-200";
+
+  const rows = (meta.queueSlots || []).filter((s) => s.slot === slot);
+
+  return (
+    <div className="p-3 sm:p-4">
+      <div className={`rounded-xl border p-3 sm:p-4 ${cls}`}>
+        <div className="flex items-center justify-between text-xs text-gray-600">
+          <span className="font-medium">{label}</span>
+          {rows.length === 1 ? (
+            <span className="inline-flex items-center gap-1">
+              #{rows[0]?.order_idx ?? "–"}
+            </span>
+          ) : (
+            <span className="text-gray-400">{rows.length || 0} filas</span>
+          )}
+        </div>
+
+        <div className="mt-2 space-y-2">
+          {rows.length === 0 ? (
+            <div className="text-sm text-gray-500">Aguardando…</div>
+          ) : (
+            rows.map((r, i) => {
+              const det = r?.match_id ? meta.queueDetails?.[r.match_id] : null;
+              return (
+                <div key={`${slot}-${r.lane_idx ?? i}`} className="rounded-lg bg-white/70 p-2 border">
+                  <div className="mb-1 flex items-center justify-between text-xs text-gray-500">
+                    <span className="font-medium">
+                      {r.lane_code ? `Fila ${r.lane_code}` : ""}
+                      {r.group_name ? ` • Grupo ${r.group_name}` : ""}
+                    </span>
+                    <span className="text-gray-500">#{r.order_idx ?? "–"}</span>
+                  </div>
+                  {det ? (
+                    <div className="text-sm font-medium text-gray-900">
+                      {det.home_team_name} <span className="text-gray-400">x</span> {det.away_team_name}
+                    </div>
+                  ) : (
+                    <div className="text-sm text-gray-500">Aguardando…</div>
+                  )}
+                  {r.stage ? (
+                    <div className="mt-1 text-[11px] text-gray-500">{String(r.stage).toUpperCase()}</div>
+                  ) : null}
+                </div>
+              );
+            })
+          )}
         </div>
       </div>
     </div>

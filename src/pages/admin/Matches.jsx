@@ -99,6 +99,7 @@ export default function Matches() {
   const [isOnline, setIsOnline] = useState(typeof navigator !== "undefined" ? navigator.onLine : true);
   const [manualSetEdit, setManualSetEdit] = useState(false);
   const [confirmingFinalizeId, setConfirmingFinalizeId] = useState(null);
+  const [capacities, setCapacities] = useState({}); // sport_id -> max_live
 
   const channelRef = useRef(null);
   const mountedRef = useRef(true);
@@ -156,6 +157,13 @@ export default function Matches() {
     }
     const unique = Array.from(new Set((data || []).map((r) => r.name).filter(Boolean)));
     setSports(unique.map((name) => ({ key: norm(name), name })));
+  };
+
+  // Carrega capacidades de cada modalidade
+  const loadCapacities = async () => {
+    const { data } = await supabase.from("sport_capacity").select("sport_id, max_live");
+    const map = Object.fromEntries((data || []).map(r => [String(r.sport_id), Number(r.max_live || 1)]));
+    setCapacities(map);
   };
 
   // Carrega partidas (sem filtrar por esporte no servidor para evitar mismatch de tipos)
@@ -252,6 +260,7 @@ export default function Matches() {
       await ensureSession();
       await checkIsAdmin();
       await loadSports();
+      await loadCapacities();
       await loadMatches({ showSkeleton: true });
     };
     initialize();
@@ -268,6 +277,7 @@ export default function Matches() {
       await checkIsAdmin();
       if (session) {
         await loadSports();
+        await loadCapacities();
         await loadMatches({ showSkeleton: true });
       } else {
         setMatches([]);
@@ -315,8 +325,7 @@ export default function Matches() {
   }, [selectedSport, selectedStatus]);
 
   // ---------- cálculo dos jogos liberados para iniciar ----------
-  // Por modalidade (sport_id numérico), se houver ongoing/paused, ninguém inicia.
-  // Caso contrário, só o scheduled elegível com menor ordem.
+  // Por modalidade (sport_id numérico), considera capacidade para permitir múltiplos jogos simultâneos.
   const allowedStartIds = useMemo(() => {
     const mapBySport = new Map();
     for (const m of matches) {
@@ -326,17 +335,30 @@ export default function Matches() {
     }
 
     const allowed = new Set();
-    for (const [key, arr] of mapBySport.entries()) {
-      if (key === "unknown") continue; // Sem sport_id => não libera
-      const hasActive = arr.some((x) => x.status === "ongoing" || x.status === "paused");
-      if (hasActive) continue;
-      const eligible = arr.filter(isEligibleToStart);
-      if (!eligible.length) continue;
-      eligible.sort((a, b) => orderValue(a) - orderValue(b));
-      allowed.add(eligible[0].id);
+    for (const [sid, arr] of mapBySport.entries()) {
+      if (sid === "unknown") continue;
+
+      const cap = Number(capacities[sid] || 1);
+      const liveCnt = arr.filter(x => x.status === "ongoing" || x.status === "paused").length;
+      const free = Math.max(cap - liveCnt, 0);
+      if (free <= 0) continue;
+
+      const eligible = arr
+        .filter(m => m.status === "scheduled" && Boolean(m.home?.id && m.away?.id))
+        .sort((a, b) => {
+          const ao = Number.isFinite(Number(a.order_idx)) ? Number(a.order_idx) :
+                     Number.isFinite(Number(a.round)) ? Number(a.round) : Number.MAX_SAFE_INTEGER;
+          const bo = Number.isFinite(Number(b.order_idx)) ? Number(b.order_idx) :
+                     Number.isFinite(Number(b.round)) ? Number(b.round) : Number.MAX_SAFE_INTEGER;
+          return ao - bo;
+        });
+
+      for (let i = 0; i < Math.min(free, eligible.length); i++) {
+        allowed.add(eligible[i].id);
+      }
     }
     return allowed;
-  }, [matches]);
+  }, [matches, capacities]);
 
   /* ================================ Mutations ================================ */
 
@@ -464,37 +486,52 @@ export default function Matches() {
   // ---------- guarda de fila no clique ----------
   const tryStartMatch = async (m) => {
     setLastError(null);
-
     const sid = m?.sport_id ? String(m.sport_id) : null;
-    if (!sid) {
-      setLastError("Partida sem modalidade válida (sport_id ausente).");
-      return;
+    if (!sid) { 
+      setLastError("Partida sem modalidade válida (sport_id ausente)."); 
+      return; 
     }
 
     try {
-      // Revalida no servidor (evita corrida)
-      const { data: sameSport, error } = await supabase
-        .from("matches")
-        .select("id,status,group_name,order_idx,round,home_team_id,away_team_id,sport_id")
-        .eq("sport_id", sid);
+      // 1) lê capacidade do servidor
+      const { data: capRows, error: capErr } = await supabase
+        .from("sport_capacity")
+        .select("max_live")
+        .eq("sport_id", sid)
+        .maybeSingle();
+      if (capErr) throw capErr;
+      const cap = Number(capRows?.max_live || 1);
 
-      if (error) throw error;
+      // 2) lê partidas do mesmo esporte
+      const { data: sameSport, error: qErr } = await supabase
+        .from("matches")
+        .select("id,status,order_idx,round,home_team_id,away_team_id")
+        .eq("sport_id", sid);
+      if (qErr) throw qErr;
       if (!sameSport) throw new Error("Falha ao validar ordem.");
 
-      const active = sameSport.some((x) => x.status === "ongoing" || x.status === "paused");
-      if (active) throw new Error("Já existe uma partida em andamento/pausada nesta modalidade. Encerre-a antes de iniciar outra.");
+      const liveCnt = sameSport.filter(x => x.status === "ongoing" || x.status === "paused").length;
+      const free = Math.max(cap - liveCnt, 0);
+      if (free <= 0) throw new Error("Capacidade ao vivo já ocupada nesta modalidade.");
 
-      const eligible = sameSport.filter((x) => x.status === "scheduled" && Boolean(x.home_team_id && x.away_team_id));
-      if (!eligible.length) throw new Error("Não há partidas elegíveis para iniciar.");
+      const eligible = sameSport
+        .filter(x => x.status === "scheduled" && x.home_team_id && x.away_team_id)
+        .sort((a, b) => {
+          const ao = Number.isFinite(Number(a.order_idx)) ? Number(a.order_idx) :
+                     Number.isFinite(Number(a.round)) ? Number(a.round) : Number.MAX_SAFE_INTEGER;
+          const bo = Number.isFinite(Number(b.order_idx)) ? Number(b.order_idx) :
+                     Number.isFinite(Number(b.round)) ? Number(b.round) : Number.MAX_SAFE_INTEGER;
+          return ao - bo;
+        });
 
-      eligible.sort((a, b) => orderValue(a) - orderValue(b));
-      const nextId = eligible[0].id;
-      if (nextId !== m.id) throw new Error("Você só pode iniciar o próximo jogo da fila.");
+      // só pode iniciar se estiver entre os "free" primeiros da fila
+      const canIds = new Set(eligible.slice(0, free).map(e => e.id));
+      if (!canIds.has(m.id)) throw new Error("Aguarde: apenas os próximos da fila podem iniciar.");
 
       await applyStatusChange(m, "ongoing");
     } catch (e) {
       console.error("tryStartMatch error:", e);
-      setLastError(e.message || "Não foi possível iniciar a partida (ordem restrita).");
+      setLastError(e.message || "Não foi possível iniciar a partida (ordem/capacidade restrita).");
     }
   };
 

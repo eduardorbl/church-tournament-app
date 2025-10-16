@@ -67,7 +67,9 @@ function publicLogoUrl(raw) {
 function blockHasMatches(block) {
   if (!block) return false;
   const slots = block.slots || {};
-  const hasSlotMatch = ["live", "call", "next"].some((slot) => Boolean(slots?.[slot]?.match_id));
+  const hasSlotMatch = ["live", "call", "next"].some(
+    (slot) => Array.isArray(slots?.[slot]) && slots[slot].some((row) => !!row?.match_id)
+  );
   const hasUpcoming = Array.isArray(block.compactUpcoming) && block.compactUpcoming.length > 0;
   return hasSlotMatch || hasUpcoming;
 }
@@ -160,12 +162,21 @@ export default function Home() {
         active.map(async (sp) => {
           // slots live/call/next
           const { data: slots, error: slotsErr } = await supabase
-            .from("v_queue_slots")
-            .select("slot, order_idx, match_id, stage, group_name")
+            .from("v_queue_slots_v2")
+            .select("slot, lane_idx, lane_code, order_idx, match_id, stage, group_name")
             .eq("sport_id", sp.sportId);
           if (slotsErr) throw slotsErr;
 
-          const bySlot = Object.fromEntries((slots || []).map((r) => [r.slot, r]));
+          const bySlot = { live: [], call: [], next: [] };
+          (slots || []).forEach((r) => {
+            if (bySlot[r.slot]) {
+              bySlot[r.slot].push(r);
+            }
+          });
+          Object.keys(bySlot).forEach((slot) => {
+            bySlot[slot].sort((a, b) => (a.lane_idx ?? 0) - (b.lane_idx ?? 0));
+          });
+
           const ids = (slots || []).map((s) => s.match_id).filter(Boolean);
 
           // detalhes completos (matches + teams) para slots
@@ -195,7 +206,8 @@ export default function Home() {
           }
 
           // --- Fallback: se o slot "live" não veio, tenta pegar jogo ongoing/paused e simular ---
-          if (!bySlot?.live?.match_id) {
+          const hasLiveMatch = (bySlot.live || []).some((row) => row?.match_id);
+          if (!hasLiveMatch) {
             const { data: liveCandidates, error: liveErr } = await supabase
               .from("matches")
               .select(`
@@ -211,38 +223,64 @@ export default function Home() {
 
             if (!liveErr && liveCandidates?.length) {
               // prioriza ongoing > paused; depois, mais recentemente atualizado
-              const pick = liveCandidates
+              const picks = liveCandidates
                 .slice()
                 .sort((a, b) => {
                   const pr = (s) => (s === "ongoing" ? 1 : s === "paused" ? 2 : 9);
                   const d = pr(a.status) - pr(b.status);
                   if (d !== 0) return d;
                   return new Date(b.updated_at || b.starts_at || 0) - new Date(a.updated_at || a.starts_at || 0);
-                })[0];
+                })
+                .slice(0, 2);
 
-              // normaliza logos exatamente como acima
-              const normHome = pick.home && typeof pick.home === "object"
-                ? { ...pick.home, logo_url: normalizeLogo(pick.home.logo_url) }
-                : pick.home;
-              const normAway = pick.away && typeof pick.away === "object"
-                ? { ...pick.away, logo_url: normalizeLogo(pick.away.logo_url) }
-                : pick.away;
-              const normalizedPick = { ...pick, home: normHome, away: normAway };
+              picks.forEach((pick) => {
+                const normHome = pick.home && typeof pick.home === "object"
+                  ? { ...pick.home, logo_url: normalizeLogo(pick.home.logo_url) }
+                  : pick.home;
+                const normAway = pick.away && typeof pick.away === "object"
+                  ? { ...pick.away, logo_url: normalizeLogo(pick.away.logo_url) }
+                  : pick.away;
+                const normalizedPick = { ...pick, home: normHome, away: normAway };
 
-              // injeta nos detalhes e simula o slot "live"
-              details[normalizedPick.id] = normalizedPick;
-              bySlot.live = {
-                slot: "live",
-                match_id: normalizedPick.id,
-                order_idx: normalizedPick.order_idx,
-                stage: normalizedPick.stage,
-                group_name: normalizedPick.group_name,
-              };
+                details[normalizedPick.id] = normalizedPick;
+
+                if (!bySlot.live) bySlot.live = [];
+                const emptyIdx = bySlot.live.findIndex((row) => !row?.match_id);
+                if (emptyIdx !== -1) {
+                  const baseRow = bySlot.live[emptyIdx] || {};
+                  bySlot.live[emptyIdx] = {
+                    ...baseRow,
+                    slot: "live",
+                    match_id: normalizedPick.id,
+                    order_idx: normalizedPick.order_idx,
+                    stage: normalizedPick.stage,
+                    group_name: normalizedPick.group_name,
+                  };
+                } else {
+                  const laneIdx = bySlot.live.length;
+                  const laneCode =
+                    laneIdx < 26 ? String.fromCharCode(65 + laneIdx) : `${laneIdx + 1}`;
+                  bySlot.live.push({
+                    slot: "live",
+                    lane_idx: laneIdx,
+                    lane_code: laneCode,
+                    match_id: normalizedPick.id,
+                    order_idx: normalizedPick.order_idx,
+                    stage: normalizedPick.stage,
+                    group_name: normalizedPick.group_name,
+                  });
+                }
+              });
+
+              bySlot.live.sort((a, b) => (a.lane_idx ?? 0) - (b.lane_idx ?? 0));
             }
           }
 
           // 3) Lista compacta extra de agendados (com times) – os 6 próximos
-          const ignoreIds = [bySlot.call?.match_id, bySlot.next?.match_id].filter(Boolean);
+          const ignoreIds = [
+            ...(bySlot.call || []).map((row) => row.match_id),
+            ...(bySlot.next || []).map((row) => row.match_id),
+          ].filter(Boolean);
           const { data: upcoming } = await supabase
             .from("matches")
             .select(`
@@ -293,7 +331,9 @@ export default function Home() {
 
   const patchMatchFromRealtime = useCallback((row) => {
     if (!row?.id) return false;
-    let patched = false;
+    let willReloadSlots = false;
+    let didLocalPatch = false;
+
     setBlocks((prev) => {
       let changed = false;
       const updatedBlocks = { ...prev };
@@ -306,9 +346,23 @@ export default function Home() {
         const currentDetail = block.details?.[row.id];
 
         if (currentDetail) {
+          const nextStatus = row.status ?? currentDetail.status;
+          const nextOrder = row.order_idx ?? currentDetail.order_idx;
+          const nextStage = row.stage ?? currentDetail.stage;
+          const nextGroup = row.group_name ?? currentDetail.group_name;
+
+          const affectsSlots =
+            nextStatus !== currentDetail.status ||
+            nextOrder !== currentDetail.order_idx ||
+            nextStage !== currentDetail.stage ||
+            nextGroup !== currentDetail.group_name;
+          if (affectsSlots) {
+            willReloadSlots = true;
+          }
+
           const patchedDetail = {
             ...currentDetail,
-            status: row.status ?? currentDetail.status,
+            status: nextStatus,
             starts_at: row.starts_at ?? currentDetail.starts_at,
             updated_at: row.updated_at ?? currentDetail.updated_at,
             home_score:
@@ -316,9 +370,9 @@ export default function Home() {
             away_score:
               typeof row.away_score === "number" ? row.away_score : currentDetail.away_score,
             meta: row.meta ?? currentDetail.meta,
-            stage: row.stage ?? currentDetail.stage,
-            group_name: row.group_name ?? currentDetail.group_name,
-            order_idx: row.order_idx ?? currentDetail.order_idx,
+            stage: nextStage,
+            group_name: nextGroup,
+            order_idx: nextOrder,
             venue: row.venue ?? currentDetail.venue,
           };
           newDetails = {
@@ -326,6 +380,7 @@ export default function Home() {
             [row.id]: patchedDetail,
           };
           blockChanged = true;
+          didLocalPatch = true;
         }
 
         let newUpcoming = block.compactUpcoming;
@@ -358,7 +413,6 @@ export default function Home() {
       }
 
       if (changed) {
-        patched = true;
         blocksRef.current = updatedBlocks;
         return updatedBlocks;
       }
@@ -366,7 +420,8 @@ export default function Home() {
       return prev;
     });
 
-    return patched;
+    if (willReloadSlots) return false;
+    return didLocalPatch;
   }, []);
 
   useEffect(() => {
@@ -467,9 +522,17 @@ export default function Home() {
 
 function SportBlock({ block, now }) {
   const { label, callText, slots, details, compactUpcoming } = block || {};
-  const live = slots?.live?.match_id ? details?.[slots.live.match_id] : null;
-  const call = slots?.call?.match_id ? details?.[slots.call.match_id] : null;
-  const next = slots?.next?.match_id ? details?.[slots.next.match_id] : null;
+  const liveList = (slots?.live || [])
+    .map((r) => ({ row: r, match: details?.[r.match_id] }))
+    .filter((x) => x.match);
+  const callList = (slots?.call || [])
+    .map((r) => ({ row: r, match: details?.[r.match_id] }))
+    .filter((x) => x.match);
+  const nextList = (slots?.next || [])
+    .map((r) => ({ row: r, match: details?.[r.match_id] }))
+    .filter((x) => x.match);
+  const liveTop = liveList[0]?.match;
+  const liveTopRow = liveList[0]?.row;
   const hasMatches = blockHasMatches(block);
 
   return (
@@ -488,24 +551,35 @@ function SportBlock({ block, now }) {
               <div className="mb-2 flex items-center justify-between">
                 <div className="flex items-center gap-2 text-sm font-medium text-red-800">
                   <PlayCircle className="h-4 w-4" />
-                  {live ? (
-                    <Link to={`/match/${live.id}`} className="hover:underline">
-                      {live.status === "paused" ? "Pausado" : "Ao vivo"} — Jogo {live.order_idx}
-                      {live.group_name ? ` • Grupo ${live.group_name}` : ""}
+                  {liveTop ? (
+                    <Link to={`/match/${liveTop.id}`} className="hover:underline">
+                      {liveTop.status === "paused" ? "Pausado" : "Ao vivo"} — Jogo {liveTop.order_idx}
+                      {liveTopRow?.lane_code ? ` • Fila ${liveTopRow.lane_code}` : ""}
+                      {liveTop.group_name ? ` • Grupo ${liveTop.group_name}` : ""}
                     </Link>
                   ) : (
                     <span>Ao vivo</span>
                   )}
                 </div>
-                {live?.stage ? (
-                  <StagePill stage={live.stage} />
+                {liveTop?.stage ? (
+                  <StagePill stage={liveTop.stage} />
                 ) : (
                   <span className="text-xs text-red-700/70">Aguardando…</span>
                 )}
               </div>
 
-              {live ? (
-                <LiveScoreRow match={live} now={now} />
+              {liveList.length ? (
+                <div className="space-y-2">
+                  {liveList.map(({ row, match }) => (
+                    <div key={`live-${row.lane_idx ?? match.id}`} className="rounded-lg bg-white p-2 border">
+                      <div className="mb-1 text-[11px] font-semibold text-gray-600">
+                        {row.lane_code ? `Fila ${row.lane_code}` : ""}
+                        {match.group_name ? ` • Grupo ${match.group_name}` : ""}
+                      </div>
+                      <LiveScoreRow match={match} now={now} />
+                    </div>
+                  ))}
+                </div>
               ) : (
                 <div className="text-sm text-gray-600">Nenhuma partida ao vivo no momento.</div>
               )}
@@ -515,19 +589,19 @@ function SportBlock({ block, now }) {
           {/* Fila: Próxima (⚠️) e Seguinte */}
           <div className="px-4 pb-4 sm:px-5 sm:pb-5">
             <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
-              <QueueCard
+              <QueueList
                 tone="amber"
                 icon={<Megaphone className="h-4 w-4" />}
                 title="Próxima partida"
                 subtitle={callText}
-                match={call}
+                items={callList}
               />
-              <QueueCard
+              <QueueList
                 tone="emerald"
                 icon={<ChevronsRight className="h-4 w-4" />}
                 title="Jogo seguinte"
                 subtitle="Na sequência:"
-                match={next}
+                items={nextList}
               />
             </div>
           </div>
@@ -689,6 +763,58 @@ function QueueCard({ tone, icon, title, subtitle, match }) {
           </>
         ) : (
           <div className="text-sm text-gray-500">Aguardando…</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function QueueList({ tone, icon, title, subtitle, items }) {
+  const toneClasses =
+    tone === "amber"
+      ? "border-amber-200 bg-amber-50"
+      : tone === "emerald"
+      ? "border-emerald-200 bg-emerald-50"
+      : "border-gray-200 bg-gray-50";
+
+  return (
+    <div className={`rounded-xl border ${toneClasses} p-3 sm:p-4`}>
+      <div className="mb-1 flex items-center justify-between">
+        <div className="flex items-center gap-2 text-sm font-semibold text-gray-900">
+          {icon}
+          <span>{title}</span>
+        </div>
+        <span className="text-xs text-gray-500">{items?.length ? `${items.length} fila(s)` : ""}</span>
+      </div>
+
+      <div className="text-xs text-gray-600">{subtitle}</div>
+
+      <div className="mt-2 space-y-2">
+        {!items?.length ? (
+          <div className="text-sm text-gray-500">Aguardando…</div>
+        ) : (
+          items.map(({ row, match }) => (
+            <div key={`q-${row.slot}-${row.lane_idx ?? match.id}`} className="rounded-lg bg-white/70 p-2 border">
+              <div className="mb-1 flex items-center justify-between text-[11px] text-gray-600">
+                <span className="font-semibold">
+                  {row.lane_code ? `Fila ${row.lane_code}` : ""}
+                  {match.group_name ? ` • Grupo ${match.group_name}` : ""}
+                </span>
+                <span className="text-gray-500">#{row.order_idx ?? "–"}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <TeamWithName team={match.home} />
+                <span className="px-1 text-gray-400">x</span>
+                <TeamWithName team={match.away} align="right" />
+              </div>
+              <div className="mt-2 flex items-center justify-between text-[11px] text-gray-500">
+                <span className="truncate">{match.venue || ""}</span>
+                <Link to={`/match/${match.id}`} className="inline-flex items-center gap-1 text-blue-600 hover:underline">
+                  Ver partida <ChevronRight className="h-3.5 w-3.5" />
+                </Link>
+              </div>
+            </div>
+          ))
         )}
       </div>
     </div>
