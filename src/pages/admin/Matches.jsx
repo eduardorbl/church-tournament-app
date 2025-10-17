@@ -188,12 +188,12 @@ export default function Matches() {
       // Filtra status no servidor (é string, compatível)
       if (selectedStatus) query = query.eq("status", selectedStatus);
 
-      // Mostrar grupos, todos jogos de pré-oitavas (r32) e mata-mata com ambos os times
+      // Mostrar grupos, todos jogos de pré-oitavas (r32) e mata-mata explicitamente
       query = query.or(
         [
-          "group_name.not.is.null",
-          "stage.eq.r32",
-          "and(home_team_id.not.is.null,away_team_id.not.is.null)"
+          "group_name.not.is.null",                // grupos
+          "stage.in.(r32,semi,3lugar,final)",      // mata-matas SEM exigir times
+          "and(home_team_id.not.is.null,away_team_id.not.is.null)" // fallback
         ].join(",")
       );
 

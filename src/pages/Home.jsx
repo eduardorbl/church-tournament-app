@@ -531,6 +531,9 @@ function SportBlock({ block, now }) {
   const nextList = (slots?.next || [])
     .map((r) => ({ row: r, match: details?.[r.match_id] }))
     .filter((x) => x.match);
+  
+  // 👇 só mostra "Fila X" se houver mais de uma lane no slot
+  const showLiveLane = (liveList?.length || 0) > 1;
   const liveTop = liveList[0]?.match;
   const liveTopRow = liveList[0]?.row;
   const hasMatches = blockHasMatches(block);
@@ -554,7 +557,7 @@ function SportBlock({ block, now }) {
                   {liveTop ? (
                     <Link to={`/match/${liveTop.id}`} className="hover:underline">
                       {liveTop.status === "paused" ? "Pausado" : "Ao vivo"} — Jogo {liveTop.order_idx}
-                      {liveTopRow?.lane_code ? ` • Fila ${liveTopRow.lane_code}` : ""}
+                      {showLiveLane && liveTopRow?.lane_code ? ` • Fila ${liveTopRow.lane_code}` : ""}
                       {liveTop.group_name ? ` • Grupo ${liveTop.group_name}` : ""}
                     </Link>
                   ) : (
@@ -573,8 +576,8 @@ function SportBlock({ block, now }) {
                   {liveList.map(({ row, match }) => (
                     <div key={`live-${row.lane_idx ?? match.id}`} className="rounded-lg bg-white p-2 border">
                       <div className="mb-1 text-[11px] font-semibold text-gray-600">
-                        {row.lane_code ? `Fila ${row.lane_code}` : ""}
-                        {match.group_name ? ` • Grupo ${match.group_name}` : ""}
+                        {showLiveLane && row.lane_code ? `Fila ${row.lane_code}` : ""}
+                        {match.group_name ? (showLiveLane && row.lane_code ? ` • Grupo ${match.group_name}` : `Grupo ${match.group_name}`) : ""}
                       </div>
                       <LiveScoreRow match={match} now={now} />
                     </div>
@@ -770,6 +773,7 @@ function QueueCard({ tone, icon, title, subtitle, match }) {
 }
 
 function QueueList({ tone, icon, title, subtitle, items }) {
+  const showLane = (items?.length || 0) > 1;
   const toneClasses =
     tone === "amber"
       ? "border-amber-200 bg-amber-50"
@@ -797,8 +801,8 @@ function QueueList({ tone, icon, title, subtitle, items }) {
             <div key={`q-${row.slot}-${row.lane_idx ?? match.id}`} className="rounded-lg bg-white/70 p-2 border">
               <div className="mb-1 flex items-center justify-between text-[11px] text-gray-600">
                 <span className="font-semibold">
-                  {row.lane_code ? `Fila ${row.lane_code}` : ""}
-                  {match.group_name ? ` • Grupo ${match.group_name}` : ""}
+                  {showLane && row.lane_code ? `Fila ${row.lane_code}` : ""}
+                  {match.group_name ? (showLane && row.lane_code ? ` • Grupo ${match.group_name}` : `Grupo ${match.group_name}`) : ""}
                 </span>
                 <span className="text-gray-500">#{row.order_idx ?? "–"}</span>
               </div>
