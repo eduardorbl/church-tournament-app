@@ -18,18 +18,17 @@ import {
   ChevronRight,
   ShieldAlert,
 } from "lucide-react";
+import { reindexAndEnsureKO } from "../../utils/reindexKnockout";
 
 // ========================= Constantes do domínio =========================
 const RULES = {
-  pebolim: { name: "Pebolim", required: 24, path: "/admin/campeonatos/pebolim", variant: "1v3_1v2_3v2" },
-  fifa:    { name: "FIFA",    required: 32, path: "/admin/campeonatos/fifa" },
-  futsal:  { name: "Futsal",  required: 9,  path: "/admin/campeonatos/futsal", variant: "1v3_1v2_3v2" },
-  volei:   { name: "Vôlei",   required: 9,  path: "/admin/campeonatos/volei",  variant: "1v2_1v3_2v3" },
+  fifa:   { name: "FIFA",   required: 32, path: "/admin/campeonatos/fifa", rpcName: "FIFA" },
+  futsal: { name: "Futsal", required: 9,  path: "/admin/campeonatos/futsal", variant: "1v3_1v2_3v2", rpcName: "Futsal" },
+  volei:  { name: "Vôlei",  required: 9,  path: "/admin/campeonatos/volei",  variant: "1v2_1v3_2v3", rpcName: "Volei" },
 };
 
 // Map para casar nomes da tabela com as chaves locais
 const NAME_TO_KEY = {
-  Pebolim: "pebolim",
   FIFA: "fifa",
   Futsal: "futsal",
   Volei: "volei",
@@ -117,11 +116,12 @@ export default function AdminTournaments() {
         name: s.name,
         key: NAME_TO_KEY[s.name?.trim()] || toKey(s.name),
       }));
-      setSports(mapped);
+      const filtered = mapped.filter((s) => Boolean(RULES[s.key]));
+      setSports(filtered);
 
       // Fetch per-sport info em paralelo
       const entries = await Promise.all(
-        mapped.map(async (s) => {
+        filtered.map(async (s) => {
           const [teamsCountRes, groupsRes, matchesRes, standingsRes] = await Promise.all([
             supabase.from("teams").select("id", { count: "exact", head: true }).eq("sport_id", s.id),
             supabase
@@ -138,9 +138,9 @@ export default function AdminTournaments() {
           const standingsCount = standingsRes?.count ?? 0;
           const groupsMeta = summarizeGroups(groupsRes?.data || []);
 
-          // Slots (live / call / next) a partir da view v_queue_slots_v2
+          // Slots (live / call / next) a partir da view v_queue_slots_v3
           const { data: slots } = await supabase
-            .from("v_queue_slots_v2")
+            .from("v_queue_slots_v3")
             .select("slot, lane_idx, lane_code, order_idx, match_id, stage, group_name")
             .eq("sport_id", s.id);
 
@@ -197,8 +197,7 @@ export default function AdminTournaments() {
     if (!meta) return false;
     if (key === "fifa") return meta.teamCount === RULES.fifa.required;
 
-    // Vôlei/Futsal: 3 grupos de 3; Pebolim: 8 grupos de 3
-    const expect = key === "pebolim" ? 8 : 3;
+    const expect = 3;
     const groups = Object.values(meta.groupsMeta.byGroup || {});
     const allHave3 = groups.length === expect && groups.every((g) => g.members.length === 3);
     const seedsOk = groups.every((g) => sameSet(g.members.map((m) => m.seed_in_group), [1, 2, 3]));
@@ -218,8 +217,24 @@ export default function AdminTournaments() {
     setConfirmGenerate(null);
     try {
       if (key === "fifa") {
+        // Reset de partidas em andamento antes de reindexar
+        await supabase.from("matches")
+          .update({ status: "scheduled", starts_at: null })
+          .eq("sport_id", sportId)
+          .in("status", ["ongoing", "paused"]);
+
         const { error } = await supabase.rpc("fifa_preserve_order_and_reset_played", { p_reset_played: true });
         if (error) throw error;
+        
+        // Usa reindex_fifa_safe para manter timers e propagar vencedores
+        const { error: reindexErr } = await supabase.rpc("reindex_fifa_safe", { p_sport_name: "FIFA" });
+        if (reindexErr) throw reindexErr;
+        
+        const { error: resetErr } = await supabase.rpc("reset_fifa_later_rounds", { p_sport_name: "FIFA" });
+        if (resetErr) throw resetErr;
+
+        // Propaga vencedores de R32 para oitavas (se já houver vencedores)
+        await supabase.rpc("fifa_propagate_r32_to_oitavas", { p_sport_name: "FIFA" });
       } else {
         // Limpa tudo existente
         const { data: matches } = await supabase.from("matches").select("id").eq("sport_id", sportId);
@@ -235,6 +250,15 @@ export default function AdminTournaments() {
           p_variant: variant,
         });
         if (error) throw error;
+
+        if (key === "futsal" || key === "volei") {
+          await reindexAndEnsureKO(RULES[key]?.rpcName || RULES[key]?.name);
+        } else {
+          const sportName = RULES[key]?.rpcName || RULES[key]?.name;
+          if (sportName) {
+            await supabase.rpc("admin_reindex_order_idx_for_sport", { p_sport_name: sportName });
+          }
+        }
       }
 
       setFlash(`Campeonato de ${RULES[key].name} gerado com sucesso (ordem fixa).`);
@@ -270,24 +294,34 @@ export default function AdminTournaments() {
   };
 
   // Ações de arena (seguras, respeitam capacidade)
-  const startFillUntilCapacity = async (sportId, limit = null) => {
+  const startNext = async (sportName) => {
     try {
-      const params = { p_sport_id: sportId };
-      if (limit) params.p_limit = limit;
-      const { error } = await supabase.rpc("admin_start_fill_until_capacity", params);
+      const { error } = await supabase.rpc("admin_start_next", { p_sport_name: sportName });
       if (error) throw error;
-      setFlash("Partidas iniciadas com sucesso.");
+      setFlash("Partida iniciada com sucesso.");
+      await load();
+    } catch (e) {
+      setFlash(`Erro ao iniciar partida: ${e.message || e}`);
+    }
+  };
+
+  // Inicia múltiplas partidas até preencher capacidade (para FIFA com 2 consoles)
+  const startFillCapacity = async (sportName, count = 2) => {
+    try {
+      for (let i = 0; i < count; i++) {
+        const { error } = await supabase.rpc("admin_start_next", { p_sport_name: sportName });
+        if (error) {
+          // Se não conseguir iniciar mais, para o loop
+          if (i === 0) throw error;
+          break;
+        }
+      }
+      setFlash(`${count > 1 ? 'Partidas iniciadas' : 'Partida iniciada'} com sucesso.`);
       await load();
     } catch (e) {
       setFlash(`Erro ao iniciar partidas: ${e.message || e}`);
     }
   };
-
-  // Inicia todas as partidas possíveis até a capacidade
-  const startAll = async (sportId) => await startFillUntilCapacity(sportId);
-
-  // Inicia apenas uma partida (mais conservador)
-  const startOne = async (sportId) => await startFillUntilCapacity(sportId, 1);
 
   // --------- Render ---------
   return (
@@ -470,7 +504,10 @@ function renderSlot(meta, slot) {
       ? "bg-amber-50 border-amber-200"
       : "bg-emerald-50 border-emerald-200";
 
-  const data = (meta.queueSlots || []).find((s) => s.slot === slot);
+  const sortedRows = (meta.queueSlots || [])
+    .filter((s) => s.slot === slot)
+    .sort((a, b) => orderIdxValue(a) - orderIdxValue(b));
+  const data = sortedRows[0];
   const det = data?.match_id ? meta.queueDetails?.[data.match_id] : null;
 
   return (
@@ -508,26 +545,27 @@ function renderSlotMulti(meta, slot) {
       : "bg-emerald-50 border-emerald-200";
 
   const rows = (meta.queueSlots || []).filter((s) => s.slot === slot);
+  const sortedRows = rows.slice().sort((a, b) => orderIdxValue(a) - orderIdxValue(b));
 
   return (
     <div className="p-3 sm:p-4">
       <div className={`rounded-xl border p-3 sm:p-4 ${cls}`}>
         <div className="flex items-center justify-between text-xs text-gray-600">
           <span className="font-medium">{label}</span>
-          {rows.length === 1 ? (
+          {sortedRows.length === 1 ? (
             <span className="inline-flex items-center gap-1">
-              #{rows[0]?.order_idx ?? "–"}
+              #{sortedRows[0]?.order_idx ?? "–"}
             </span>
           ) : (
-            <span className="text-gray-400">{rows.length || 0} filas</span>
+            <span className="text-gray-400">{sortedRows.length || 0} filas</span>
           )}
         </div>
 
         <div className="mt-2 space-y-2">
-          {rows.length === 0 ? (
+          {sortedRows.length === 0 ? (
             <div className="text-sm text-gray-500">Aguardando…</div>
           ) : (
-            rows.map((r, i) => {
+            sortedRows.map((r, i) => {
               const det = r?.match_id ? meta.queueDetails?.[r.match_id] : null;
               return (
                 <div key={`${slot}-${r.lane_idx ?? i}`} className="rounded-lg bg-white/70 p-2 border">
@@ -556,4 +594,9 @@ function renderSlotMulti(meta, slot) {
       </div>
     </div>
   );
+}
+
+function orderIdxValue(row) {
+  const value = Number(row?.order_idx);
+  return Number.isFinite(value) ? value : Number.MAX_SAFE_INTEGER;
 }

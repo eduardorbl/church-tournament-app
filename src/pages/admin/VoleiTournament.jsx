@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../supabaseClient";
 import { useNavigate } from "react-router-dom";
+import { reindexAndEnsureKO } from "../../utils/reindexKnockout";
 
 const GROUP_KEYS = ["A", "B", "C"];
 const TEAMS_PER_GROUP = 3;
@@ -194,10 +195,11 @@ export default function VoleiTournament() {
         return;
       }
 
-      // 5) Cria slots de mata-mata (semis/final/3º)
-      await supabase.rpc("maybe_create_knockout", { p_sport_name: "Volei" });
+      // 5) Reindexa partidas e garante mata-mata
+      await reindexAndEnsureKO("Volei");
+      await loadAll();
 
-      // Com tudo 'scheduled' e order_idx definido, a v_queue_slots já mostra:
+      // Com tudo 'scheduled' e order_idx definido, a v_queue_slots_v3 já mostra:
       // call = Jogo 1, next = Jogo 2, live vazio.
       alert("✅ Grupos confirmados e jogos gerados!\n\nVoltando para a tela de campeonatos...");
       setTimeout(() => navigate("/admin/campeonatos"), 1200);

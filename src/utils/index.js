@@ -16,11 +16,10 @@ export const SPORT_ICON = {
   Futsal: "⚽",
   Volei: "🏐",
   FIFA: "🎮⚽",
-  Pebolim: "🎮",
 };
 
 // Sport order
-export const SPORT_ORDER = ["Futsal", "Volei", "FIFA", "Pebolim"];
+export const SPORT_ORDER = ["Futsal", "Volei", "FIFA"];
 
 // Timezone e formatador de data/hora (Campinas, SP)
 const tz = "America/Sao_Paulo";

@@ -175,34 +175,29 @@ export default function FifaTournament() {
         return;
       }
 
-      // Placeholders de oitavas/quartas/semis/final/3º lugar
-      await supabase.from("matches").insert(
-        Array.from({ length: 8 }).map((_, i) => ({
-          sport_id: sportId,
-          stage: "oitavas",
-          round: i + 1,
-          order_idx: 16 + (i + 1), // 17..24
-          status: "scheduled",
-        }))
-      );
-      await supabase.from("matches").insert(
-        Array.from({ length: 4 }).map((_, i) => ({
-          sport_id: sportId,
-          stage: "quartas",
-          round: i + 1,
-          order_idx: 24 + (i + 1), // 25..28
-          status: "scheduled",
-        }))
-      );
-      await supabase.from("matches").insert([
-        { sport_id: sportId, stage: "semi",   round: 1, order_idx: 29, status: "scheduled" },
-        { sport_id: sportId, stage: "semi",   round: 2, order_idx: 30, status: "scheduled" },
-        { sport_id: sportId, stage: "final",  round: 1, order_idx: 31, status: "scheduled" },
-        { sport_id: sportId, stage: "3lugar", round: 1, order_idx: 32, status: "scheduled" },
-      ]);
+      // Reset de partidas em andamento antes de reindexar
+      await supabase.from("matches")
+        .update({ status: "scheduled", starts_at: null })
+        .eq("sport_id", sportId)
+        .in("status", ["ongoing", "paused"]);
+
+      // Garante KO montado e ordem consistente
+      const { error: knockoutErr } = await supabase.rpc("maybe_create_knockout", { p_sport_name: "FIFA" });
+      if (knockoutErr) throw knockoutErr;
+      const { error: resetErr } = await supabase.rpc("reset_fifa_later_rounds", { p_sport_name: "FIFA" });
+      if (resetErr) throw resetErr;
+      
+      // Usa reindex_fifa_safe para manter timers e propagar vencedores
+      const { error: reindexErr } = await supabase.rpc("reindex_fifa_safe", { p_sport_name: "FIFA" });
+      if (reindexErr) throw reindexErr;
+
+      // Propaga vencedores de R32 para oitavas (se já houver vencedores)
+      await supabase.rpc("fifa_propagate_r32_to_oitavas", { p_sport_name: "FIFA" });
 
       // Standings (idempotente)
       await supabase.rpc("seed_initial_standings", { p_sport_name: "FIFA", p_reset: true });
+
+      await loadTeams();
 
       alert("✅ Chaveamento criado com sucesso!\n\nVoltando para a tela de campeonatos…");
       setTimeout(() => navigate("/admin/campeonatos"), 1200);
@@ -227,8 +222,28 @@ export default function FifaTournament() {
     try {
       setBusy(true);
       // Recomenda-se usar o RPC que já gera todas as fases e placeholders corretamente
+      // Reset de partidas em andamento antes de reindexar
+      await supabase.from("matches")
+        .update({ status: "scheduled", starts_at: null })
+        .eq("sport_id", sportId)
+        .in("status", ["ongoing", "paused"]);
+
       const { error } = await supabase.rpc("fifa_seed_32_bracket", { p_sport_name: "FIFA", p_reset: false });
       if (error) throw error;
+
+      const { error: knockoutErr } = await supabase.rpc("maybe_create_knockout", { p_sport_name: "FIFA" });
+      if (knockoutErr) throw knockoutErr;
+      const { error: resetErr } = await supabase.rpc("reset_fifa_later_rounds", { p_sport_name: "FIFA" });
+      if (resetErr) throw resetErr;
+      
+      // Usa reindex_fifa_safe para manter timers e propagar vencedores
+      const { error: reindexErr } = await supabase.rpc("reindex_fifa_safe", { p_sport_name: "FIFA" });
+      if (reindexErr) throw reindexErr;
+
+      // Propaga vencedores de R32 para oitavas (se já houver vencedores)
+      await supabase.rpc("fifa_propagate_r32_to_oitavas", { p_sport_name: "FIFA" });
+
+      await loadTeams();
 
       alert("✅ Partidas do FIFA geradas com sucesso!\n\nVoltando para a tela de campeonatos…");
       setTimeout(() => navigate("/admin/campeonatos"), 1200);
@@ -299,7 +314,7 @@ export default function FifaTournament() {
               const away = teams.find((t) => t.id === m.away);
               return (
                 <li key={idx} className="flex flex-col gap-1 border rounded p-2 bg-gray-50">
-                  <span className="text-xs font-semibold text-gray-600">Jogo {idx + 1}</span>
+                  <span className="text-xs font-semibold text-gray-600">Jogo {m.order_idx ?? idx + 1}</span>
                   <div className="flex items-center justify-between gap-2">
                     {/* Slot A */}
                     <div className="flex items-center gap-2 flex-1">

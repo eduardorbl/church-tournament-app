@@ -14,13 +14,13 @@ import {
 
 /**
  * Home unificada do evento:
- * - Para cada esporte (Vôlei, Futsal, Pebolim, FIFA):
+ * - Para cada esporte (Vôlei, Futsal, FIFA):
  *   (1) "Ao vivo" (se houver), com placar/sets e link para a MatchPage
  *   (2) Fila com dois cartões fixos: ⚠️ Próxima e Jogo seguinte (com badges e links)
  *   (3) (opcional) lista compacta de agendados
  *
  * Banco esperado:
- * - View public.v_queue_slots (slots: 'live', 'call', 'next' por esporte)
+ * - View public.v_queue_slots_v3 (slots: 'live', 'call', 'next' por esporte com suporte a lanes)
  * - Tabela matches com order_idx definido para a fila sequencial
  * - Events/placares atualizados em match_events → atualizarão home via realtime
  */
@@ -29,7 +29,6 @@ const SPORT_LIST = [
   { name: "Volei", label: "Vôlei", key: "volei", callText: "⚠️ Compareçam à quadra de Vôlei:" },
   { name: "FIFA", label: "FIFA", key: "fifa", callText: "⚠️ Compareçam à área do console:" },
   { name: "Futsal", label: "Futsal", key: "futsal", callText: "⚠️ Compareçam à quadra de Futsal:" },
-  { name: "Pebolim", label: "Pebolim", key: "pebolim", callText: "⚠️ Compareçam à mesa de pebolim:" },
 ];
 
 const STAGE_LABEL = {
@@ -72,6 +71,11 @@ function blockHasMatches(block) {
   );
   const hasUpcoming = Array.isArray(block.compactUpcoming) && block.compactUpcoming.length > 0;
   return hasSlotMatch || hasUpcoming;
+}
+
+function orderIdxValue(row) {
+  const value = Number(row?.order_idx);
+  return Number.isFinite(value) ? value : Number.MAX_SAFE_INTEGER;
 }
 
 // Helpers de tempo para “Ao vivo”
@@ -162,7 +166,7 @@ export default function Home() {
         active.map(async (sp) => {
           // slots live/call/next
           const { data: slots, error: slotsErr } = await supabase
-            .from("v_queue_slots_v2")
+            .from("v_queue_slots_v3")
             .select("slot, lane_idx, lane_code, order_idx, match_id, stage, group_name")
             .eq("sport_id", sp.sportId);
           if (slotsErr) throw slotsErr;
@@ -174,7 +178,11 @@ export default function Home() {
             }
           });
           Object.keys(bySlot).forEach((slot) => {
-            bySlot[slot].sort((a, b) => (a.lane_idx ?? 0) - (b.lane_idx ?? 0));
+            bySlot[slot].sort((a, b) => {
+              const diff = orderIdxValue(a) - orderIdxValue(b);
+              if (diff !== 0) return diff;
+              return (a.lane_idx ?? 0) - (b.lane_idx ?? 0);
+            });
           });
 
           const ids = (slots || []).map((s) => s.match_id).filter(Boolean);
@@ -272,7 +280,11 @@ export default function Home() {
                 }
               });
 
-              bySlot.live.sort((a, b) => (a.lane_idx ?? 0) - (b.lane_idx ?? 0));
+              bySlot.live.sort((a, b) => {
+                const diff = orderIdxValue(a) - orderIdxValue(b);
+                if (diff !== 0) return diff;
+                return (a.lane_idx ?? 0) - (b.lane_idx ?? 0);
+              });
             }
           }
 

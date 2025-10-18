@@ -644,17 +644,16 @@ export default function Volei() {
         `)
         .eq("sport_id", sid);
       if (error) throw error;
-      const mkTeam = (id) => (id ? ({ ...(teamsRef.current[id] || {}), id, name: String((teamsRef.current[id]?.name ?? "A definir")) }) : null);
+      const mkTeam = (id) => (id ? ({ ...(teamsRef.current[id] || {}), id, name: String((teamsRef.current[id]?.name ?? "A definir")) }) : { name: "A definir" });
       const rows = (data || []).map((r) => {
-        const displayOrder = Number.isFinite(Number(r.order_idx)) ? Number(r.order_idx) : null;
-        const sortKey = Number.isFinite(Number(r.order_idx)) ? Number(r.order_idx)
-          : Number.isFinite(Number(r.round)) ? Number(r.round)
-          : Number.MAX_SAFE_INTEGER;
+        const numericOrder = Number(r.order_idx);
+        const orderKey = Number.isFinite(numericOrder) ? numericOrder : Number.MAX_SAFE_INTEGER;
+        const displayOrder = Number.isFinite(numericOrder) ? numericOrder : null;
         return {
           id: r.id,
           sport_id: r.sport_id,
           order_idx: displayOrder, // para exibir
-          _sortKey: sortKey,       // para ordenar
+          _orderKey: orderKey,     // para ordenar
           stage: normStage(r.stage),
           round: r.round,
           group_name: r.group_name,
@@ -670,12 +669,15 @@ export default function Volei() {
         };
       });
       const phaseRank = { grupos: 1, oitavas: 2, quartas: 3, semi: 4, "3lugar": 5, final: 6 };
-      rows.sort((a, b) =>
-        (phaseRank[a.stage] ?? 99) - (phaseRank[b.stage] ?? 99) ||
-        (a._sortKey - b._sortKey) ||
-        (ts(a.starts_at) - ts(b.starts_at)) ||
-        (a.id - b.id)
-      );
+      rows.sort((a, b) => {
+        const diff = (a._orderKey ?? Number.MAX_SAFE_INTEGER) - (b._orderKey ?? Number.MAX_SAFE_INTEGER);
+        if (diff !== 0) return diff;
+        const stageDiff = (phaseRank[a.stage] ?? 99) - (phaseRank[b.stage] ?? 99);
+        if (stageDiff !== 0) return stageDiff;
+        const timeDiff = ts(a.starts_at) - ts(b.starts_at);
+        if (timeDiff !== 0) return timeDiff;
+        return ts(a.updated_at) - ts(b.updated_at);
+      });
       setMatches(rows);
       console.info("[Vôlei] matches carregados:", rows.length);
     } catch (e) {
@@ -858,7 +860,17 @@ export default function Volei() {
     );
     if (groupFilter !== "todos") arr = arr.filter((m) => normGroup(m.group_name) === groupFilter);
     if (stageFilter !== "todos") arr = arr.filter((m) => m.stage === stageFilter);
-    arr.sort((a, b) => (ts(a.starts_at) - ts(b.starts_at)) || ((a.order_idx ?? 1) - (b.order_idx ?? 1)));
+    const orderValue = (m) => {
+      const v = Number(m?.order_idx);
+      return Number.isFinite(v) ? v : Number.MAX_SAFE_INTEGER;
+    };
+    arr.sort((a, b) => {
+      const diff = orderValue(a) - orderValue(b);
+      if (diff !== 0) return diff;
+      const timeDiff = ts(a.starts_at) - ts(b.starts_at);
+      if (timeDiff !== 0) return timeDiff;
+      return ts(a.updated_at) - ts(b.updated_at);
+    });
     return arr;
   }, [matches, groupFilter, stageFilter]);
 

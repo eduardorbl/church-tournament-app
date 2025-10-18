@@ -670,8 +670,8 @@ export default function Futsal() {
             status: r.status,
             home_score: r.home_score,
             away_score: r.away_score,
-            home: r.home_team_id ? { id: r.home_team_id, name: String(r.home_team_name ?? "A definir"), color: r.home_team_color, logo_url: normalizeLogo(r.home_team_logo) } : null,
-            away: r.away_team_id ? { id: r.away_team_id, name: String(r.away_team_name ?? "A definir"), color: r.away_team_color, logo_url: normalizeLogo(r.away_team_logo) } : null,
+            home: r.home_team_id ? { id: r.home_team_id, name: String(r.home_team_name ?? "A definir"), color: r.home_team_color, logo_url: normalizeLogo(r.home_team_logo) } : { name: "A definir" },
+            away: r.away_team_id ? { id: r.away_team_id, name: String(r.away_team_name ?? "A definir"), color: r.away_team_color, logo_url: normalizeLogo(r.away_team_logo) } : { name: "A definir" },
           }));
         }
       }
@@ -694,15 +694,22 @@ export default function Futsal() {
         rows = (jrows || []).map((m) => ({
           ...m,
           order_idx: m.order_idx ?? m.round ?? m.id,
-          home: m.home ? { ...m.home, name: String(m.home.name ?? "A definir"), logo_url: normalizeLogo(m.home.logo_url) } : null,
-          away: m.away ? { ...m.away, name: String(m.away.name ?? "A definir"), logo_url: normalizeLogo(m.away.logo_url) } : null,
+          home: m.home ? { ...m.home, name: String(m.home.name ?? "A definir"), logo_url: normalizeLogo(m.home.logo_url) } : { name: "A definir" },
+          away: m.away ? { ...m.away, name: String(m.away.name ?? "A definir"), logo_url: normalizeLogo(m.away.logo_url) } : { name: "A definir" },
         }));
       }
 
-      // Ordenação original
+      // Ordena prioritariamente por order_idx e usa stage como desempate
       const phaseRank = { grupos: 1, oitavas: 2, quartas: 3, semi: 4, "3lugar": 5, final: 6 };
-      const ord = (x) => (Number.isFinite(Number(x?.order_idx)) ? Number(x.order_idx) : Number.MAX_SAFE_INTEGER);
-      rows.sort((a, b) => (phaseRank[a.stage] ?? 99) - (phaseRank[b.stage] ?? 99) || ord(a) - ord(b));
+      const ord = (x) => {
+        const value = Number(x?.order_idx);
+        return Number.isFinite(value) ? value : Number.MAX_SAFE_INTEGER;
+      };
+      rows.sort((a, b) => {
+        const diff = ord(a) - ord(b);
+        if (diff !== 0) return diff;
+        return (phaseRank[a.stage] ?? 99) - (phaseRank[b.stage] ?? 99);
+      });
 
       setMatches(rows);
     } catch (e) {
@@ -823,7 +830,11 @@ export default function Futsal() {
   const scheduledAll = useMemo(() => {
     let arr = (matches || []).filter((m) => {
       if (m.status !== "scheduled") return false;
+      // Inclui jogos de grupo
       if (m.group_name) return true;
+      // Inclui mata-matas (semi, 3lugar, final) MESMO SEM times definidos (TBD)
+      if (m.stage && ["semi", "3lugar", "final"].includes(m.stage)) return true;
+      // Fallback: só mostra se ambos times existirem
       return m.home?.id && m.away?.id;
     });
     if (groupFilter !== "todos") arr = arr.filter((m) => m.group_name === groupFilter);

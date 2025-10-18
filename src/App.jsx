@@ -8,7 +8,6 @@ import Home from "./pages/Home";
 import Futsal from "./pages/Futsal";
 import Volei from "./pages/Volei";
 import FIFA from "./pages/FIFA";
-import Pebolim from "./pages/Pebolim";
 import TeamPage from "./pages/TeamPage";
 import MatchPage from "./pages/MatchPage"; 
 import SetPassword from "./pages/SetPassword";
@@ -22,7 +21,6 @@ import AdminTournaments from "./pages/admin/Tournaments";
 import FutsalTournament from "./pages/admin/FutsalTournament";
 import VoleiTournament from "./pages/admin/VoleiTournament";
 import FIFATournament from "./pages/admin/FIFATournament";
-import PebolimTournament from "./pages/admin/PebolimTournament";
 
 // Componente simples de loading
 function LoadingFallback() {
@@ -111,7 +109,6 @@ export default function App() {
               <Link to="/futsal" className="hover:underline transition-colors whitespace-nowrap px-1 sm:px-2">Futsal</Link>
               <Link to="/volei" className="hover:underline transition-colors whitespace-nowrap px-1 sm:px-2">Vôlei</Link>
               <Link to="/fifa" className="hover:underline transition-colors whitespace-nowrap px-1 sm:px-2">FIFA</Link>
-              <Link to="/pebolim" className="hover:underline transition-colors whitespace-nowrap px-1 sm:px-2">Pebolim</Link>
 
               {/* Link admin */}
               {isAdmin && (
@@ -135,7 +132,6 @@ export default function App() {
           <Route path="/futsal" element={<Futsal />} />
           <Route path="/volei" element={<Volei />} />
           <Route path="/fifa" element={<FIFA />} />
-          <Route path="/pebolim" element={<Pebolim />} />
 
           {/* TeamPage */}
           <Route path="/team/:id" element={<TeamPage />} />
@@ -159,7 +155,6 @@ export default function App() {
           <Route path="/admin/campeonatos/futsal" element={<RequireAdmin><FutsalTournament /></RequireAdmin>} />
           <Route path="/admin/campeonatos/volei" element={<RequireAdmin><VoleiTournament /></RequireAdmin>} />
           <Route path="/admin/campeonatos/fifa" element={<RequireAdmin><FIFATournament /></RequireAdmin>} />
-          <Route path="/admin/campeonatos/pebolim" element={<RequireAdmin><PebolimTournament /></RequireAdmin>} />
 
           {/* 404 */}
           <Route

@@ -219,6 +219,7 @@ function ListMatchCard({ match }) {
 export default function FIFA() {
   const [sportId, setSportId] = useState(null);
   const [matches, setMatches] = useState([]);
+  const [queueSlots, setQueueSlots] = useState({ live: [], call: [], next: [] });
   const [loading, setLoading] = useState(true);
   const channelRef = useRef(null);
   const reloadingRef = useRef(false);
@@ -239,12 +240,14 @@ export default function FIFA() {
         .from("match_detail_view")
         .select(`
           id, sport_id, order_idx,
-          stage, round, group_name, starts_at, updated_at, venue, status,
+          stage, group_name, starts_at, updated_at, venue, status,
           home_team_id, home_team_name, home_team_color, home_team_logo,
           away_team_id, away_team_name, away_team_color, away_team_logo,
           home_score, away_score
         `)
-        .eq("sport_id", sid);
+        .eq("sport_id", sid)
+        .order("order_idx", { ascending: true })
+        .order("id", { ascending: true });
 
       let rows = [];
       if (!verr && vrows?.length) {
@@ -253,7 +256,6 @@ export default function FIFA() {
           sport_id: r.sport_id,
           order_idx: r.order_idx,
           stage: r.stage,
-          round: r.round,
           group_name: r.group_name,
           starts_at: r.starts_at,
           updated_at: r.updated_at,
@@ -273,12 +275,14 @@ export default function FIFA() {
         const { data: jrows, error: jerr } = await supabase
           .from("matches")
           .select(`
-            id, order_idx, stage, round, group_name, starts_at, updated_at, venue, status,
+            id, order_idx, stage, group_name, starts_at, updated_at, venue, status,
             home_score, away_score,
             home:home_team_id ( id, name, logo_url, color ),
             away:away_team_id ( id, name, logo_url, color )
           `)
-          .eq("sport_id", sid);
+          .eq("sport_id", sid)
+          .order("order_idx", { ascending: true })
+          .order("id", { ascending: true });
 
         if (jerr) throw jerr;
 
@@ -293,7 +297,10 @@ export default function FIFA() {
       rows.sort((a, b) => {
         const so = stageOrder(a.stage) - stageOrder(b.stage);
         if (so !== 0) return so;
-        return (a.order_idx ?? 9999) - (b.order_idx ?? 9999);
+        const idxA = Number.isFinite(Number(a?.order_idx)) ? Number(a.order_idx) : Number.MAX_SAFE_INTEGER;
+        const idxB = Number.isFinite(Number(b?.order_idx)) ? Number(b.order_idx) : Number.MAX_SAFE_INTEGER;
+        if (idxA !== idxB) return idxA - idxB;
+        return String(a.id || "").localeCompare(String(b.id || ""));
       });
 
       setMatches(rows);
@@ -303,17 +310,37 @@ export default function FIFA() {
     }
   }, []);
 
+  const loadQueue = useCallback(async (sid) => {
+    try {
+      const { data, error } = await supabase
+        .from("v_queue_slots_v3")
+        .select("slot, lane_idx, lane_pos, lane_code, order_idx, match_id, stage, group_name")
+        .eq("sport_id", sid);
+      if (error) throw error;
+      const bySlot = { live: [], call: [], next: [] };
+      (data || []).forEach((row) => {
+        if (bySlot[row.slot]) {
+          bySlot[row.slot].push(row);
+        }
+      });
+      setQueueSlots(bySlot);
+    } catch (e) {
+      console.error("Exceção loadQueue:", e);
+      setQueueSlots({ live: [], call: [], next: [] });
+    }
+  }, []);
+
   const loadAll = useCallback(async (sid) => {
     if (reloadingRef.current) return;
     reloadingRef.current = true;
     setLoading(true);
     try {
-      await loadMatches(sid);
+      await Promise.all([loadMatches(sid), loadQueue(sid)]);
     } finally {
       setLoading(false);
       reloadingRef.current = false;
     }
-  }, [loadMatches]);
+  }, [loadMatches, loadQueue]);
 
   useEffect(() => {
     loadSportId();
@@ -361,7 +388,45 @@ export default function FIFA() {
       groups[k].push(m);
     }
     const ordered = Object.keys(groups).sort((a, b) => stageOrder(a) - stageOrder(b));
-    return ordered.map((k) => ({ stage: k, items: groups[k].sort((a, b) => (a.order_idx ?? 0) - (b.order_idx ?? 0)) }));
+    return ordered.map((k) => ({
+      stage: k,
+      items: groups[k].sort((a, b) => {
+        const idxA = Number.isFinite(Number(a?.order_idx)) ? Number(a.order_idx) : Number.MAX_SAFE_INTEGER;
+        const idxB = Number.isFinite(Number(b?.order_idx)) ? Number(b.order_idx) : Number.MAX_SAFE_INTEGER;
+        if (idxA !== idxB) return idxA - idxB;
+        return String(a.id || "").localeCompare(String(b.id || ""));
+      }),
+    }));
+  }, [matches]);
+
+  const matchById = useMemo(() => {
+    const map = new Map();
+    (matches || []).forEach((m) => {
+      if (m?.id != null) map.set(m.id, m);
+    });
+    return map;
+  }, [matches]);
+
+  const activeStage = useMemo(() => {
+    let best = null;
+    for (const match of matches) {
+      if (match.status !== "scheduled") continue;
+      if (!best) {
+        best = match;
+        continue;
+      }
+      const stageDiff = stageOrder(match.stage) - stageOrder(best.stage);
+      if (stageDiff < 0) {
+        best = match;
+        continue;
+      }
+      if (stageDiff === 0) {
+        const idxA = Number.isFinite(Number(match?.order_idx)) ? Number(match.order_idx) : Number.MAX_SAFE_INTEGER;
+        const idxB = Number.isFinite(Number(best?.order_idx)) ? Number(best.order_idx) : Number.MAX_SAFE_INTEGER;
+        if (idxA < idxB) best = match;
+      }
+    }
+    return best?.stage ?? null;
   }, [matches]);
 
   /* ── Render ──────────────────────────────────────────────────────────────── */
@@ -390,6 +455,79 @@ export default function FIFA() {
         </div>
       ) : (
         <>
+          {/* Fila atual */}
+          {(queueSlots.call?.length || queueSlots.next?.length) ? (
+            <section className="space-y-3">
+              <h3 className="text-lg font-bold">Fila</h3>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                {["call", "next"].map((slot) => {
+                  const rows = queueSlots[slot] || [];
+                  const filteredRows = rows.filter((row) => {
+                    const match = row?.match_id ? matchById.get(row.match_id) : null;
+                    if (!match) return false;
+                    if (match.status !== "scheduled") return false;
+                    if (activeStage && match.stage !== activeStage) return false;
+                    return true;
+                  });
+                  const slotLabel = slot === "call" ? "⚠️ Compareçam" : "Próximo jogo";
+                  const accent =
+                    slot === "call"
+                      ? "border-amber-200 bg-amber-50"
+                      : "border-emerald-200 bg-emerald-50";
+                  return (
+                    <div key={slot} className={`space-y-2 rounded-2xl border ${accent} p-3`}>
+                      <h4 className="text-sm font-semibold text-gray-700">{slotLabel}</h4>
+                      {filteredRows.length === 0 ? (
+                        <p className="text-xs text-gray-500">Sem partidas nesta fila.</p>
+                      ) : (
+                        <ul className="space-y-2">
+                          {filteredRows.map((row, idx) => {
+                            const match = row?.match_id ? matchById.get(row.match_id) : null;
+                            const orderIdx = Number.isFinite(Number(row?.order_idx))
+                              ? Number(row.order_idx)
+                              : Number.isFinite(Number(match?.order_idx))
+                              ? Number(match.order_idx)
+                              : null;
+                            const laneCode = row?.lane_code ? String(row.lane_code) : null;
+                            const lanePos =
+                              row?.lane_pos !== undefined && row?.lane_pos !== null
+                                ? Number(row.lane_pos)
+                                : null;
+                            const laneInfo = laneCode
+                              ? `Fila ${laneCode}`
+                              : lanePos !== null
+                              ? `Posição ${lanePos}`
+                              : null;
+                            const stageLabel = friendlyStage(match?.stage);
+                            const homeName = match?.home?.name || "A definir";
+                            const awayName = match?.away?.name || "A definir";
+                            return (
+                              <li
+                                key={`${slot}-${row.match_id ?? idx}`}
+                                className="rounded-xl border border-white/60 bg-white p-2 text-xs text-gray-700 shadow-sm"
+                              >
+                                <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] text-gray-500">
+                                  <span className="font-semibold">
+                                    {orderIdx ? `Jogo ${orderIdx}` : "Jogo —"}
+                                    {stageLabel ? ` • ${stageLabel}` : ""}
+                                  </span>
+                                  {laneInfo ? <span>{laneInfo}</span> : null}
+                                </div>
+                                <div className="mt-1 text-sm font-medium text-gray-900">
+                                  {homeName} <span className="text-gray-400">x</span> {awayName}
+                                </div>
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          ) : null}
+
           {/* 1) CHAVEAMENTO */}
           <section className="space-y-6">
             <h3 className="text-lg font-bold">Chaveamento</h3>

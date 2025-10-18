@@ -2,6 +2,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../supabaseClient";
 import { useNavigate } from "react-router-dom";
+import { reindexAndEnsureKO } from "../../utils/reindexKnockout";
 
 const GROUP_KEYS = ["A", "B", "C"];
 const TEAMS_PER_GROUP = 3;
@@ -196,8 +197,9 @@ export default function FutsalTournament() {
         return;
       }
 
-      // 5) Garantir slots de mata-mata
-      await supabase.rpc("maybe_create_knockout", { p_sport_name: "Futsal" });
+      // 5) Reindexa partidas e garante mata-mata
+      await reindexAndEnsureKO("Futsal");
+      await loadAll();
 
       alert("✅ Grupos confirmados e jogos gerados!\n\nVoltando para a tela de campeonatos...");
       setTimeout(() => navigate("/admin/campeonatos"), 1200);

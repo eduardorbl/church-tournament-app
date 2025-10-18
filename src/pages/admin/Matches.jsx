@@ -74,15 +74,32 @@ function LiveProgressBar({ status }) {
 }
 
 // Ordem dentro da fila
-const orderValue = (m) =>
-  Number.isFinite(Number(m?.order_idx))
-    ? Number(m.order_idx)
-    : Number.isFinite(Number(m?.round))
-    ? Number(m.round)
-    : Number(m?.id ?? Number.MAX_SAFE_INTEGER);
+const orderValue = (m) => {
+  const value = Number(m?.order_idx);
+  return Number.isFinite(value) ? value : Number.MAX_SAFE_INTEGER;
+};
 
-// Nunca iniciar sem times (grupos e mata-mata)
-const isEligibleToStart = (m) => m.status === "scheduled" && Boolean(m.home?.id && m.away?.id);
+const STAGE_PRIORITY = {
+  grupos: 1,
+  r32: 2,
+  oitavas: 3,
+  quartas: 4,
+  semi: 5,
+  "3lugar": 6,
+  final: 7,
+};
+
+const stagePriority = (stage) => {
+  if (stage === undefined || stage === null) return 99;
+  const key = String(stage).toLowerCase();
+  return STAGE_PRIORITY[key] ?? 99;
+};
+
+// Prioridade de status para ordenação
+const statusTier = (s) =>
+  s === "ongoing" ? 0 :
+  s === "paused"  ? 1 :
+  s === "scheduled" ? 2 : 3;
 
 /* ================================ Página ================================ */
 
@@ -99,7 +116,7 @@ export default function Matches() {
   const [isOnline, setIsOnline] = useState(typeof navigator !== "undefined" ? navigator.onLine : true);
   const [manualSetEdit, setManualSetEdit] = useState(false);
   const [confirmingFinalizeId, setConfirmingFinalizeId] = useState(null);
-  const [capacities, setCapacities] = useState({}); // sport_id -> max_live
+  const [queueSlots, setQueueSlots] = useState({}); // sport_id -> [{slot,lane_idx,order_idx,match_id},...]
 
   const channelRef = useRef(null);
   const mountedRef = useRef(true);
@@ -156,14 +173,8 @@ export default function Matches() {
       return;
     }
     const unique = Array.from(new Set((data || []).map((r) => r.name).filter(Boolean)));
-    setSports(unique.map((name) => ({ key: norm(name), name })));
-  };
-
-  // Carrega capacidades de cada modalidade
-  const loadCapacities = async () => {
-    const { data } = await supabase.from("sport_capacity").select("sport_id, max_live");
-    const map = Object.fromEntries((data || []).map(r => [String(r.sport_id), Number(r.max_live || 1)]));
-    setCapacities(map);
+    const filtered = unique.filter((name) => norm(name) !== "pebolim");
+    setSports(filtered.map((name) => ({ key: norm(name), name })));
   };
 
   // Carrega partidas (sem filtrar por esporte no servidor para evitar mismatch de tipos)
@@ -175,7 +186,7 @@ export default function Matches() {
         .from("matches")
         .select(
           `
-          id, stage, round, group_name, order_idx, starts_at, venue, created_at, updated_at,
+          id, stage, group_name, order_idx, starts_at, venue, created_at, updated_at,
           status, home_score, away_score, meta,
           sport_id,
           home_team_id, away_team_id,
@@ -191,13 +202,13 @@ export default function Matches() {
       // Mostrar grupos, todos jogos de pré-oitavas (r32) e mata-mata explicitamente
       query = query.or(
         [
-          "group_name.not.is.null",                // grupos
-          "stage.in.(r32,semi,3lugar,final)",      // mata-matas SEM exigir times
+          "group_name.not.is.null",                                // grupos
+          "stage.in.(r32,oitavas,quartas,semi,3lugar,final)",      // mata-matas SEM exigir times
           "and(home_team_id.not.is.null,away_team_id.not.is.null)" // fallback
         ].join(",")
       );
 
-      const { data, error } = await query;
+      const { data, error } = await query.order("order_idx", { ascending: true }).order("id", { ascending: true });
       if (error) {
         console.error("loadMatches error:", error);
         if (mountedRef.current) setLastError(error.message || "Falha ao carregar partidas.");
@@ -231,21 +242,105 @@ export default function Matches() {
           return { ...m, home, away, _sportKey: norm(sportName) };
         });
 
+        normalized = normalized.filter((m) => m._sportKey !== "pebolim");
+
         // Filtro por modalidade (cliente) usando nome normalizado
         if (selectedSport) {
           normalized = normalized.filter((m) => m._sportKey === selectedSport);
         }
 
-        // Ordena por status e ordem de execução
-        const sortedData = normalized.sort((a, b) => {
-          const aOrder = STATUS_ORDER[a.status] || 999;
-          const bOrder = STATUS_ORDER[b.status] || 999;
-          if (aOrder !== bOrder) return aOrder - bOrder;
-          return orderValue(a) - orderValue(b);
+        // ===== NOVA ORDENAÇÃO COM FILA =====
+        let groupedSlots = {};
+        if (normalized.length) {
+          const sportIds = Array.from(
+            new Set(normalized.map((m) => (m.sport_id ? String(m.sport_id) : null)).filter(Boolean))
+          );
+          if (sportIds.length) {
+            const { data: slotsData } = await supabase
+              .from("v_queue_slots_v3")
+              .select("sport_id, slot, lane_idx, lane_pos, lane_code, order_idx, match_id, stage, group_name")
+              .in("sport_id", sportIds);
+
+            groupedSlots = (slotsData || []).reduce((acc, row) => {
+              const key = String(row.sport_id);
+              if (!acc[key]) acc[key] = [];
+              acc[key].push(row);
+              return acc;
+            }, {});
+          }
+        }
+
+        // Enriquecer dados com info de fila e timestamps úteis
+        const enriched = normalized.map((m) => {
+          const rows = groupedSlots[String(m.sport_id)] || [];
+          const q = rows.find((r) => r?.match_id === m.id) || null;
+
+          const startsAtMs = m.starts_at ? new Date(m.starts_at).getTime() : Number.POSITIVE_INFINITY;
+          const queueOrder = Number.isFinite(Number(q?.order_idx)) ? Number(q.order_idx) : Number.POSITIVE_INFINITY;
+          const lanePos = Number.isFinite(Number(q?.lane_pos)) ? Number(q.lane_pos) : Number.POSITIVE_INFINITY;
+
+          return {
+            ...m,
+            _q: q,
+            _isCall: q?.slot === "call" && m.status === "scheduled",
+            _startsAtMs: startsAtMs,
+            _queueOrder: queueOrder,
+            _lanePos: lanePos,
+          };
+        });
+
+        // Regra de ordenação:
+        // 1) ongoing, 2) paused, 3) scheduled(call), 4) scheduled, 5) finished
+        // Nos scheduled(call) → por lane_pos, depois queueOrder, depois starts_at, depois order_idx
+        // Nos scheduled comuns → por starts_at, depois order_idx
+        enriched.sort((a, b) => {
+          const at = statusTier(a.status), bt = statusTier(b.status);
+          if (at !== bt) return at - bt;
+
+          // Ao vivo/pausados: por starts_at, depois updated_at
+          if (at === 0 || at === 1) {
+            const as = a.starts_at ? new Date(a.starts_at).getTime() : 0;
+            const bs = b.starts_at ? new Date(b.starts_at).getTime() : 0;
+            if (as !== bs) return as - bs;
+            const au = a.updated_at ? new Date(a.updated_at).getTime() : 0;
+            const bu = b.updated_at ? new Date(b.updated_at).getTime() : 0;
+            if (au !== bu) return bu - au;
+            return String(a.id).localeCompare(String(b.id));
+          }
+
+          // Agendados
+          if (at === 2) {
+            const ac = a._isCall ? 0 : 1;
+            const bc = b._isCall ? 0 : 1;
+            if (ac !== bc) return ac - bc;
+
+            // Se ambos são "call" → lane_pos, queueOrder, starts_at, order_idx
+            if (ac === 0) {
+              if (a._lanePos !== b._lanePos) return a._lanePos - b._lanePos;
+              if (a._queueOrder !== b._queueOrder) return a._queueOrder - b._queueOrder;
+              if (a._startsAtMs !== b._startsAtMs) return a._startsAtMs - b._startsAtMs;
+              return orderValue(a) - orderValue(b);
+            }
+
+            // Demais agendados → starts_at, order_idx
+            if (a._startsAtMs !== b._startsAtMs) return a._startsAtMs - b._startsAtMs;
+            return orderValue(a) - orderValue(b);
+          }
+
+          // Finalizados: mais recentes primeiro
+          if (at === 3) {
+            const au = a.updated_at ? new Date(a.updated_at).getTime() : 0;
+            const bu = b.updated_at ? new Date(b.updated_at).getTime() : 0;
+            if (au !== bu) return bu - au;
+            return orderValue(b) - orderValue(a);
+          }
+
+          return 0;
         });
 
         if (mountedRef.current) {
-          setMatches(sortedData);
+          setMatches(enriched);
+          setQueueSlots(groupedSlots);
         }
       }
     } finally {
@@ -260,7 +355,6 @@ export default function Matches() {
       await ensureSession();
       await checkIsAdmin();
       await loadSports();
-      await loadCapacities();
       await loadMatches({ showSkeleton: true });
     };
     initialize();
@@ -277,7 +371,6 @@ export default function Matches() {
       await checkIsAdmin();
       if (session) {
         await loadSports();
-        await loadCapacities();
         await loadMatches({ showSkeleton: true });
       } else {
         setMatches([]);
@@ -323,42 +416,6 @@ export default function Matches() {
       }
     };
   }, [selectedSport, selectedStatus]);
-
-  // ---------- cálculo dos jogos liberados para iniciar ----------
-  // Por modalidade (sport_id numérico), considera capacidade para permitir múltiplos jogos simultâneos.
-  const allowedStartIds = useMemo(() => {
-    const mapBySport = new Map();
-    for (const m of matches) {
-      const key = m?.sport_id ? String(m.sport_id) : "unknown";
-      if (!mapBySport.has(key)) mapBySport.set(key, []);
-      mapBySport.get(key).push(m);
-    }
-
-    const allowed = new Set();
-    for (const [sid, arr] of mapBySport.entries()) {
-      if (sid === "unknown") continue;
-
-      const cap = Number(capacities[sid] || 1);
-      const liveCnt = arr.filter(x => x.status === "ongoing" || x.status === "paused").length;
-      const free = Math.max(cap - liveCnt, 0);
-      if (free <= 0) continue;
-
-      const eligible = arr
-        .filter(m => m.status === "scheduled" && Boolean(m.home?.id && m.away?.id))
-        .sort((a, b) => {
-          const ao = Number.isFinite(Number(a.order_idx)) ? Number(a.order_idx) :
-                     Number.isFinite(Number(a.round)) ? Number(a.round) : Number.MAX_SAFE_INTEGER;
-          const bo = Number.isFinite(Number(b.order_idx)) ? Number(b.order_idx) :
-                     Number.isFinite(Number(b.round)) ? Number(b.round) : Number.MAX_SAFE_INTEGER;
-          return ao - bo;
-        });
-
-      for (let i = 0; i < Math.min(free, eligible.length); i++) {
-        allowed.add(eligible[i].id);
-      }
-    }
-    return allowed;
-  }, [matches, capacities]);
 
   /* ================================ Mutations ================================ */
 
@@ -483,55 +540,55 @@ export default function Matches() {
     return await applyStatusChange(m, "finished");
   };
 
+  const fifaActiveStage = useMemo(() => {
+    let best = null;
+    for (const match of matches) {
+      if (norm(match?.sport?.name || "") !== "fifa") continue;
+      if (match.status !== "scheduled") continue;
+      if (!best) {
+        best = match;
+        continue;
+      }
+      const stageDiff = stagePriority(match.stage) - stagePriority(best.stage);
+      if (stageDiff < 0) {
+        best = match;
+        continue;
+      }
+      if (stageDiff === 0 && orderValue(match) < orderValue(best)) {
+        best = match;
+      }
+    }
+    return best?.stage ?? null;
+  }, [matches]);
+
   // ---------- guarda de fila no clique ----------
   const tryStartMatch = async (m) => {
     setLastError(null);
-    const sid = m?.sport_id ? String(m.sport_id) : null;
-    if (!sid) { 
-      setLastError("Partida sem modalidade válida (sport_id ausente)."); 
-      return; 
+    const sportName = m?.sport?.name;
+    if (!sportName) {
+      setLastError("Partida sem modalidade definida.");
+      return;
+    }
+    if (!m?.id) {
+      setLastError("Partida inválida.");
+      return;
     }
 
+    setMatchBusy(m.id, true);
     try {
-      // 1) lê capacidade do servidor
-      const { data: capRows, error: capErr } = await supabase
-        .from("sport_capacity")
-        .select("max_live")
-        .eq("sport_id", sid)
-        .maybeSingle();
-      if (capErr) throw capErr;
-      const cap = Number(capRows?.max_live || 1);
-
-      // 2) lê partidas do mesmo esporte
-      const { data: sameSport, error: qErr } = await supabase
-        .from("matches")
-        .select("id,status,order_idx,round,home_team_id,away_team_id")
-        .eq("sport_id", sid);
-      if (qErr) throw qErr;
-      if (!sameSport) throw new Error("Falha ao validar ordem.");
-
-      const liveCnt = sameSport.filter(x => x.status === "ongoing" || x.status === "paused").length;
-      const free = Math.max(cap - liveCnt, 0);
-      if (free <= 0) throw new Error("Capacidade ao vivo já ocupada nesta modalidade.");
-
-      const eligible = sameSport
-        .filter(x => x.status === "scheduled" && x.home_team_id && x.away_team_id)
-        .sort((a, b) => {
-          const ao = Number.isFinite(Number(a.order_idx)) ? Number(a.order_idx) :
-                     Number.isFinite(Number(a.round)) ? Number(a.round) : Number.MAX_SAFE_INTEGER;
-          const bo = Number.isFinite(Number(b.order_idx)) ? Number(b.order_idx) :
-                     Number.isFinite(Number(b.round)) ? Number(b.round) : Number.MAX_SAFE_INTEGER;
-          return ao - bo;
-        });
-
-      // só pode iniciar se estiver entre os "free" primeiros da fila
-      const canIds = new Set(eligible.slice(0, free).map(e => e.id));
-      if (!canIds.has(m.id)) throw new Error("Aguarde: apenas os próximos da fila podem iniciar.");
-
-      await applyStatusChange(m, "ongoing");
+      // Usa admin_start_fill_until_capacity com p_limit=1 para iniciar apenas 1 partida por vez
+      // respeitando a capacidade do esporte (FIFA=2, outros=1)
+      const { error } = await supabase.rpc("admin_start_fill_until_capacity", {
+        p_sport_name: sportName,
+        p_limit: 1,
+      });
+      if (error) throw error;
+      await loadMatches({ showSkeleton: false });
     } catch (e) {
       console.error("tryStartMatch error:", e);
-      setLastError(e.message || "Não foi possível iniciar a partida (ordem/capacidade restrita).");
+      setLastError(e.message || "Não foi possível iniciar a partida.");
+    } finally {
+      setMatchBusy(m.id, false);
     }
   };
 
@@ -648,12 +705,22 @@ export default function Matches() {
             const isLive = m.status === "ongoing" || m.status === "paused";
             const cardBorder = isLive ? (m.status === "ongoing" ? "border-blue-200" : "border-orange-200") : "border-gray-200";
 
-            const isNextInQueue = allowedStartIds.has(m.id);
+            const sportQueue = queueSlots[String(m.sport_id)] || [];
+            const queueRow = sportQueue.find((row) => row?.match_id === m.id);
+            const laneCode = queueRow?.lane_code ? String(queueRow.lane_code) : null;
+            const lanePos =
+              queueRow?.lane_pos !== undefined && queueRow?.lane_pos !== null
+                ? Number(queueRow.lane_pos)
+                : null;
+            const queueOrderIdx = Number.isFinite(Number(queueRow?.order_idx)) ? Number(queueRow.order_idx) : null;
+            const isFifa = sportNameNorm === "fifa";
+            const stageEligible = !isFifa || !fifaActiveStage || m.stage === fifaActiveStage;
+            const isCallSlot = queueRow?.slot === "call" && m.status === "scheduled" && stageEligible;
 
-            return (
-              <li
-                key={m.id}
-                className={`border rounded-lg p-3 sm:p-4 flex flex-col gap-3 bg-white shadow-sm relative overflow-hidden ${cardBorder}`}
+          return (
+            <li
+              key={m.id}
+              className={`border rounded-lg p-3 sm:p-4 flex flex-col gap-3 bg-white shadow-sm relative overflow-hidden ${cardBorder}`}
               >
                 <LiveProgressBar status={m.status} />
 
@@ -675,7 +742,7 @@ export default function Matches() {
                         }
                       </span>
                     )}
-                    {m.round && <span>· J{m.round}</span>}
+                    {Number.isFinite(Number(m.order_idx)) && <span>· J{m.order_idx}</span>}
                     {isLive && (
                       <span className="inline-flex items-center gap-1 text-[11px] font-medium text-gray-600">
                         🕐 {formatGameTime(m, currentTimestamp)}
@@ -684,9 +751,12 @@ export default function Matches() {
                   </div>
 
                   <div className="flex items-center gap-2">
-                    {m.status === "scheduled" && isNextInQueue && (
+                    {m.status === "scheduled" && isCallSlot && (
                       <span className="text-[10px] px-2 py-0.5 rounded bg-indigo-100 text-indigo-700 uppercase tracking-wide">
                         Próximo na ordem
+                        {queueOrderIdx ? ` • J${queueOrderIdx}` : ""}
+                        {laneCode ? ` • Fila ${laneCode}` : ""}
+                        {lanePos !== null && lanePos !== undefined ? ` • Pos ${lanePos}` : ""}
                       </span>
                     )}
                     <span
@@ -773,12 +843,12 @@ export default function Matches() {
                   {m.status === "scheduled" && (
                     <button
                       onClick={() => startMatch(m)}
-                      disabled={busy[m.id] || !canStartByTeams || !isNextInQueue}
+                      disabled={busy[m.id] || !canStartByTeams || !isCallSlot}
                       className="px-3 py-1 text-xs rounded bg-green-600 text-white hover:bg-green-700 disabled:opacity-50"
                       title={
                         !canStartByTeams
                           ? "Defina as duas equipes antes de iniciar."
-                          : isNextInQueue
+                          : isCallSlot
                           ? "Iniciar próximo jogo da ordem."
                           : "Aguarde: apenas o próximo jogo da ordem pode iniciar."
                       }
