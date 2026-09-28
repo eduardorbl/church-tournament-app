@@ -6,6 +6,7 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "../../supabaseClient";
+import { must } from "../../lib/must";
 import {
   PlayCircle,
   FastForward,
@@ -218,10 +219,10 @@ export default function AdminTournaments() {
     try {
       if (key === "fifa") {
         // Reset de partidas em andamento antes de reindexar
-        await supabase.from("matches")
+        await must(supabase.from("matches")
           .update({ status: "scheduled", starts_at: null })
           .eq("sport_id", sportId)
-          .in("status", ["ongoing", "paused"]);
+          .in("status", ["ongoing", "paused"]), "matches");
 
         const { error } = await supabase.rpc("fifa_preserve_order_and_reset_played", { p_reset_played: true });
         if (error) throw error;
@@ -239,9 +240,9 @@ export default function AdminTournaments() {
         // Limpa tudo existente
         const { data: matches } = await supabase.from("matches").select("id").eq("sport_id", sportId);
         const ids = (matches || []).map((m) => m.id);
-        if (ids.length) await supabase.from("match_events").delete().in("match_id", ids);
-        await supabase.from("matches").delete().eq("sport_id", sportId);
-        await supabase.from("standings").delete().eq("sport_id", sportId);
+        if (ids.length) await must(supabase.from("match_events").delete().in("match_id", ids), "match_events");
+        await must(supabase.from("matches").delete().eq("sport_id", sportId), "matches");
+        await must(supabase.from("standings").delete().eq("sport_id", sportId), "standings");
 
         // Gera novas partidas na ORDEM fixa
         const variant = RULES[key]?.variant || "1v3_1v2_3v2";
@@ -256,7 +257,7 @@ export default function AdminTournaments() {
         } else {
           const sportName = RULES[key]?.rpcName || RULES[key]?.name;
           if (sportName) {
-            await supabase.rpc("admin_reindex_order_idx_for_sport", { p_sport_name: sportName });
+            await must(supabase.rpc("admin_reindex_order_idx_for_sport", { p_sport_name: sportName }), "admin_reindex_order_idx_for_sport");
           }
         }
       }
@@ -279,10 +280,10 @@ export default function AdminTournaments() {
     try {
       const { data: matches } = await supabase.from("matches").select("id").eq("sport_id", meta.sportId);
       const ids = (matches || []).map((m) => m.id);
-      if (ids.length) await supabase.from("match_events").delete().in("match_id", ids);
-      await supabase.from("matches").delete().eq("sport_id", meta.sportId);
-      await supabase.from("standings").delete().eq("sport_id", meta.sportId);
-      await supabase.from("teams").update({ group_name: null, seed_in_group: null }).eq("sport_id", meta.sportId);
+      if (ids.length) await must(supabase.from("match_events").delete().in("match_id", ids), "match_events");
+      await must(supabase.from("matches").delete().eq("sport_id", meta.sportId), "matches");
+      await must(supabase.from("standings").delete().eq("sport_id", meta.sportId), "standings");
+      await must(supabase.from("teams").update({ group_name: null, seed_in_group: null }).eq("sport_id", meta.sportId), "teams");
       setFlash(`Campeonato de ${RULES[key].name} foi reiniciado.`);
       setConfirm(null);
       await load();

@@ -121,6 +121,8 @@ export default function Matches() {
   const channelRef = useRef(null);
   const mountedRef = useRef(true);
   const timerRef = useRef(null);
+  const loadSeqRef = useRef(0);      // descarta respostas atrasadas de loadMatches
+  const reloadTimerRef = useRef(null); // debounce real para eventos do realtime
 
   // Mensagens de erro com timeout
   useEffect(() => {
@@ -180,6 +182,7 @@ export default function Matches() {
   // Carrega partidas (sem filtrar por esporte no servidor para evitar mismatch de tipos)
   const loadMatches = async ({ showSkeleton = false } = {}) => {
     if (!mountedRef.current) return;
+    const seq = ++loadSeqRef.current;
     if (showSkeleton) setLoading(true);
     try {
       let query = supabase
@@ -338,7 +341,8 @@ export default function Matches() {
           return 0;
         });
 
-        if (mountedRef.current) {
+        // Só aplica se esta ainda é a requisição mais recente
+        if (mountedRef.current && seq === loadSeqRef.current) {
           setMatches(enriched);
           setQueueSlots(groupedSlots);
         }
@@ -398,18 +402,38 @@ export default function Matches() {
       supabase.removeChannel(channelRef.current);
       channelRef.current = null;
     }
+    // Nome único por montagem: reusar o mesmo nome enquanto o canal anterior
+    // ainda está saindo faz o realtime-js devolver o canal morto.
+    const channelName = `admin-matches-${Math.random().toString(36).slice(2)}`;
+    const scheduleReload = () => {
+      if (reloadTimerRef.current) clearTimeout(reloadTimerRef.current);
+      reloadTimerRef.current = setTimeout(() => {
+        reloadTimerRef.current = null;
+        if (mountedRef.current) loadMatches({ showSkeleton: false });
+      }, 250);
+    };
     const channel = supabase
-      .channel("admin-matches")
-      .on("postgres_changes", { event: "*", schema: "public", table: "matches" }, () => {
-        // pequeno debounce para lotes
-        setTimeout(() => {
-          if (mountedRef.current) loadMatches({ showSkeleton: false });
-        }, 200);
-      })
-      .subscribe();
+      .channel(channelName)
+      .on("postgres_changes", { event: "*", schema: "public", table: "matches" }, scheduleReload)
+      .subscribe((status) => {
+        // (Re)conectou: busca de novo o que pode ter mudado enquanto estava fora
+        if (status === "SUBSCRIBED") scheduleReload();
+      });
     channelRef.current = channel;
 
+    const onVisible = () => {
+      if (document.visibilityState === "visible") scheduleReload();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("online", scheduleReload);
+
     return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("online", scheduleReload);
+      if (reloadTimerRef.current) {
+        clearTimeout(reloadTimerRef.current);
+        reloadTimerRef.current = null;
+      }
       if (channelRef.current) {
         supabase.removeChannel(channelRef.current);
         channelRef.current = null;
@@ -446,21 +470,61 @@ export default function Matches() {
     }
   };
 
+  // Placar/sets: o incremento é feito NO BANCO (admin_score_delta), nunca a partir do
+  // valor que está na tela. Assim dois admins, ou uma resposta atrasada, não "comem" pontos.
+  const scoreDelta = async (m, field, action) => {
+    const id = m.id;
+    setMatchBusy(id, true);
+    setLastError(null);
+
+    // UI otimista (só visual; o valor gravado vem do banco)
+    const isMeta = field.endsWith("_points_set") || field.endsWith("_sets");
+    const current = Math.max(0, Number((isMeta ? m?.meta?.[field] : m?.[field]) || 0));
+    const optimistic =
+      action === "reset" ? 0 : action === "inc" ? current + 1 : Math.max(0, current - 1);
+    setMatches((cur) =>
+      cur.map((x) =>
+        x.id !== id
+          ? x
+          : isMeta
+          ? { ...x, meta: { ...(x.meta || {}), [field]: optimistic } }
+          : { ...x, [field]: optimistic }
+      )
+    );
+
+    try {
+      const { data, error } = await supabase.rpc("admin_score_delta", {
+        p_id: id,
+        p_field: field,
+        p_delta: action === "inc" ? 1 : action === "dec" ? -1 : 0,
+        p_reset: action === "reset",
+      });
+      if (error) throw new Error(`Falha ao atualizar placar: ${error.message}`);
+      const row = Array.isArray(data) ? data[0] : data;
+      if (row && mountedRef.current) {
+        setMatches((cur) =>
+          cur.map((x) =>
+            x.id === id
+              ? { ...x, home_score: row.home_score, away_score: row.away_score, meta: row.meta }
+              : x
+          )
+        );
+      }
+      return true;
+    } catch (e) {
+      setLastError(e.message || "Erro ao atualizar placar.");
+      if (mountedRef.current) loadMatches({ showSkeleton: false });
+      return false;
+    } finally {
+      setMatchBusy(id, false);
+    }
+  };
+
   const changePoints = async (m, team, action) => {
     if (m.status === "scheduled") return;
-    const sportNameNorm = norm(m?.sport?.name || "");
-    const isVolei = sportNameNorm.includes("volei");
-    const meta = m.meta || {};
-    const key = isVolei ? `${team}_points_set` : `${team}_score`;
-    let next = Math.max(0, Number((isVolei ? meta[key] : m[key]) || 0));
-    if (action === "inc") next += 1;
-    if (action === "dec") next = Math.max(0, next - 1);
-    if (action === "reset") next = 0;
-    if (isVolei) {
-      await mutate(m.id, { meta: { ...meta, [key]: next } });
-    } else {
-      await mutate(m.id, { [key]: next });
-    }
+    const isVolei = norm(m?.sport?.name || "").includes("volei");
+    const field = isVolei ? `${team}_points_set` : `${team}_score`;
+    await scoreDelta(m, field, action);
   };
 
   const getSetPoints = (m, side) => Math.max(0, Number(m?.meta?.[`${side}_points_set`] || 0));
@@ -483,40 +547,38 @@ export default function Matches() {
 
   const finalizeSet = async (m, { force = false } = {}) => {
     if (m.status === "scheduled") return;
-    const meta = m.meta || {};
-    const hs = getSetPoints(m, "home");
-    const as = getSetPoints(m, "away");
-    const setsArr = Array.isArray(meta.sets) ? meta.sets : [];
     if (!force && !canFinalizeSet(m)) {
       setLastError("Para finalizar o set: mínimo 15 pontos e 2 de vantagem (ajustável em meta.rules). Clique novamente para forçar.");
       return;
     }
-    const homeWon = hs > as ? true : (as > hs ? false : null); // null = empate
-    const nextMeta = {
-      ...meta,
-      sets: [...setsArr, { h: hs, a: as, at: new Date().toISOString() }],
-      home_sets: getSets(m, "home") + (homeWon === true ? 1 : 0),
-      away_sets: getSets(m, "away") + (homeWon === false ? 1 : 0),
-      home_points_set: 0,
-      away_points_set: 0,
-    };
-    await mutate(m.id, {
-      meta: nextMeta,
-      home_score: Math.max(0, Number(m.home_score || 0)) + hs,
-      away_score: Math.max(0, Number(m.away_score || 0)) + as,
-      updated_at: new Date().toISOString(),
-    });
+    // Fecha o set no banco, lendo os pontos atuais de lá (atômico)
+    await closeSetOnServer(m, true);
+  };
+
+  // record=true: registra o set (meta.sets, home_sets/away_sets).
+  // record=false: só soma os pontos do set em andamento ao placar e zera (usado ao encerrar).
+  const closeSetOnServer = async (m, record) => {
+    setMatchBusy(m.id, true);
+    setLastError(null);
+    try {
+      const { error } = await supabase.rpc("admin_volei_close_set", {
+        p_id: m.id,
+        p_record_set: record,
+      });
+      if (error) throw new Error(`Falha ao fechar o set: ${error.message}`);
+      if (mountedRef.current) await loadMatches({ showSkeleton: false });
+      return true;
+    } catch (e) {
+      setLastError(e.message || "Erro ao fechar o set.");
+      return false;
+    } finally {
+      setMatchBusy(m.id, false);
+    }
   };
 
   const changeSets = async (m, team, action) => {
     if (m.status === "scheduled") return;
-    const meta = m.meta || {};
-    const key = team === "home" ? "home_sets" : "away_sets";
-    let value = Math.max(0, Number(meta[key] || 0));
-    if (action === "inc") value += 1;
-    if (action === "dec") value = Math.max(0, value - 1);
-    if (action === "reset") value = 0;
-    await mutate(m.id, { meta: { ...meta, [key]: value } });
+    await scoreDelta(m, team === "home" ? "home_sets" : "away_sets", action);
   };
 
   const applyStatusChange = async (m, newStatus) => {
@@ -527,15 +589,18 @@ export default function Matches() {
   };
 
   const finishMatch = async (m) => {
+    const home = m?.home?.name || "Mandante";
+    const away = m?.away?.name || "Visitante";
+    const ok = window.confirm(
+      `Encerrar a partida ${home} × ${away}?\n\nO resultado vai para a classificação e o chaveamento avança.`
+    );
+    if (!ok) return false;
+
     const hs = getSetPoints(m, "home");
     const as = getSetPoints(m, "away");
     if (hs > 0 || as > 0) {
-      const meta = m.meta || {};
-      await mutate(m.id, {
-        meta: { ...meta, home_points_set: 0, away_points_set: 0 },
-        home_score: Math.max(0, Number(m.home_score || 0)) + hs,
-        away_score: Math.max(0, Number(m.away_score || 0)) + as,
-      });
+      const flushed = await closeSetOnServer(m, false);
+      if (!flushed) return false;
     }
     return await applyStatusChange(m, "finished");
   };
@@ -604,7 +669,7 @@ export default function Matches() {
 
       {!isOnline && (
         <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-2 rounded mb-4">
-          ⚠️ Você está offline. As alterações serão sincronizadas quando a conexão for restaurada.
+          ⚠️ Você está offline. Nada do que você fizer agora será salvo — aguarde a conexão voltar.
         </div>
       )}
 

@@ -1,6 +1,7 @@
 // src/pages/admin/FifaTournament.jsx
 import React, { useEffect, useMemo, useState } from "react";
 import { supabase } from "../../supabaseClient";
+import { must } from "../../lib/must";
 import { useNavigate } from "react-router-dom";
 
 const MATCH_COUNT = 16; // 32 times → 16 jogos de pré-oitavas (r32)
@@ -148,14 +149,14 @@ export default function FifaTournament() {
 
         const oldIds = (oldMatches || []).map((m) => m.id);
         if (oldIds.length) {
-          await supabase.from("match_events").delete().in("match_id", oldIds);
+          await must(supabase.from("match_events").delete().in("match_id", oldIds), "match_events");
         }
-        await supabase.from("matches").delete().eq("sport_id", sportId);
-        await supabase.from("standings").delete().eq("sport_id", sportId);
+        await must(supabase.from("matches").delete().eq("sport_id", sportId), "matches");
+        await must(supabase.from("standings").delete().eq("sport_id", sportId), "standings");
       }
 
       // FIFA não usa grupos
-      await supabase.from("teams").update({ group_name: null }).eq("sport_id", sportId);
+      await must(supabase.from("teams").update({ group_name: null }).eq("sport_id", sportId), "teams");
 
       // Pré-oitavas: order_idx 1..16, status 'scheduled' (J1 vira ⚠️ na UI)
       const rows = bracket.map((m, i) => ({
@@ -176,10 +177,10 @@ export default function FifaTournament() {
       }
 
       // Reset de partidas em andamento antes de reindexar
-      await supabase.from("matches")
+      await must(supabase.from("matches")
         .update({ status: "scheduled", starts_at: null })
         .eq("sport_id", sportId)
-        .in("status", ["ongoing", "paused"]);
+        .in("status", ["ongoing", "paused"]), "matches");
 
       // Garante KO montado e ordem consistente
       const { error: knockoutErr } = await supabase.rpc("maybe_create_knockout", { p_sport_name: "FIFA" });
@@ -195,7 +196,7 @@ export default function FifaTournament() {
       await supabase.rpc("fifa_propagate_r32_to_oitavas", { p_sport_name: "FIFA" });
 
       // Standings (idempotente)
-      await supabase.rpc("seed_initial_standings", { p_sport_name: "FIFA", p_reset: true });
+      await must(supabase.rpc("seed_initial_standings", { p_sport_name: "FIFA", p_reset: true }), "seed_initial_standings");
 
       await loadTeams();
 
@@ -223,10 +224,10 @@ export default function FifaTournament() {
       setBusy(true);
       // Recomenda-se usar o RPC que já gera todas as fases e placeholders corretamente
       // Reset de partidas em andamento antes de reindexar
-      await supabase.from("matches")
+      await must(supabase.from("matches")
         .update({ status: "scheduled", starts_at: null })
         .eq("sport_id", sportId)
-        .in("status", ["ongoing", "paused"]);
+        .in("status", ["ongoing", "paused"]), "matches");
 
       const { error } = await supabase.rpc("fifa_seed_32_bracket", { p_sport_name: "FIFA", p_reset: false });
       if (error) throw error;

@@ -1,6 +1,7 @@
 // src/pages/admin/FutsalTournament.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../supabaseClient";
+import { must } from "../../lib/must";
 import { useNavigate } from "react-router-dom";
 import { reindexAndEnsureKO } from "../../utils/reindexKnockout";
 
@@ -175,17 +176,17 @@ export default function FutsalTournament() {
         const ids = groups[g];
         if (ids.length) {
           // group_name para todos do grupo
-          await supabase.from("teams").update({ group_name: g }).in("id", ids);
+          await must(supabase.from("teams").update({ group_name: g }).in("id", ids), "teams");
           // seeds 1..3
           for (let i = 0; i < ids.length; i++) {
-            await supabase.from("teams").update({ seed_in_group: i + 1 }).eq("id", ids[i]);
+            await must(supabase.from("teams").update({ seed_in_group: i + 1 }).eq("id", ids[i]), "teams");
           }
         }
       }
 
       // 3) Standings
-      await supabase.rpc("seed_initial_standings", { p_sport_name: "Futsal", p_reset: true });
-      await supabase.rpc("rebuild_standings", { p_sport_name: "Futsal" });
+      await must(supabase.rpc("seed_initial_standings", { p_sport_name: "Futsal", p_reset: true }), "seed_initial_standings");
+      await must(supabase.rpc("rebuild_standings", { p_sport_name: "Futsal" }), "rebuild_standings");
 
       // 4) Gerar partidas de grupos pela RPC (ordem fixa e order_idx global)
       const { error: genErr } = await supabase.rpc("admin_generate_group_fixtures_3x3", {

@@ -1,6 +1,7 @@
 // src/pages/admin/VoleiTournament.jsx
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../../supabaseClient";
+import { must } from "../../lib/must";
 import { useNavigate } from "react-router-dom";
 import { reindexAndEnsureKO } from "../../utils/reindexKnockout";
 
@@ -172,17 +173,17 @@ export default function VoleiTournament() {
         const ids = groups[g];
         if (ids.length) {
           // set group_name para os 3
-          await supabase.from("teams").update({ group_name: g }).in("id", ids);
+          await must(supabase.from("teams").update({ group_name: g }).in("id", ids), "teams");
           // set seed 1..3 na ordem exibida
           for (let i = 0; i < ids.length; i++) {
-            await supabase.from("teams").update({ seed_in_group: i + 1 }).eq("id", ids[i]);
+            await must(supabase.from("teams").update({ seed_in_group: i + 1 }).eq("id", ids[i]), "teams");
           }
         }
       }
 
       // 3) Standings (zera e prepara)
-      await supabase.rpc("seed_initial_standings", { p_sport_name: "Volei", p_reset: true });
-      await supabase.rpc("rebuild_standings", { p_sport_name: "Volei" });
+      await must(supabase.rpc("seed_initial_standings", { p_sport_name: "Volei", p_reset: true }), "seed_initial_standings");
+      await must(supabase.rpc("rebuild_standings", { p_sport_name: "Volei" }), "rebuild_standings");
 
       // 4) Gerar partidas de grupos via RPC com variante do Vôlei:
       //    "1v2_1v3_2v3" (e order_idx intercalado por rodada GA,GB,GC)
