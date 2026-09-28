@@ -1,6 +1,7 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "../auth/AuthProvider";
+import { safeRedirect } from "../lib/safeRedirect";
 
 export default function SetPassword() {
   const navigate = useNavigate();
@@ -14,17 +15,11 @@ export default function SetPassword() {
 
   const redirectPath = useMemo(() => {
     const params = new URLSearchParams(location.search);
-    const target = params.get("redirect");
-    return target && target.startsWith("/") ? target : "/";
+    return safeRedirect(params.get("redirect"));
   }, [location.search]);
-
-  useEffect(() => {
-    console.log("SetPassword mounted, user:", user?.id);
-  }, [user]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    console.log("🔥 FORM SUBMITTED - START");
 
     if (submitting) return;
 
@@ -44,27 +39,24 @@ export default function SetPassword() {
     }
 
     try {
-      console.log("🚀 Starting password update...");
 
       const { error } = await updatePassword(pwd);
       if (error) {
         console.error("Password update error:", error);
-        setErr(`Erro ao atualizar senha: ${error.message}`);
+        setErr("Não foi possível atualizar a senha. O link pode ter expirado — peça um novo.");
         setSubmitting(false);
         return;
       }
 
-      console.log("✅ Password updated successfully");
 
       setMsg("Senha definida com sucesso!");
       setTimeout(() => {
-        console.log("🎯 Navigating after password set");
         setSubmitting(false);
         navigate(redirectPath, { replace: true });
       }, 1000);
     } catch (error) {
       console.error("Unexpected error:", error);
-      setErr(`Erro inesperado: ${error.message}`);
+      setErr("Erro inesperado ao atualizar a senha. Tente novamente.");
       setSubmitting(false);
     }
   };

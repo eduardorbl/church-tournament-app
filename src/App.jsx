@@ -1,7 +1,8 @@
-import React from "react";
+import React, { lazy, Suspense } from "react";
 import { Routes, Route, Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "./auth/AuthProvider";
 import RequireAdmin from "./components/RequireAdmin";
+import ErrorBoundary from "./components/ErrorBoundary";
 
 // Páginas públicas
 import Home from "./pages/Home";
@@ -12,15 +13,16 @@ import TeamPage from "./pages/TeamPage";
 import MatchPage from "./pages/MatchPage"; 
 import SetPassword from "./pages/SetPassword";
 
-// Páginas admin
-import Admin from "./pages/Admin";
 import Login from "./components/Login";
-import AdminRosters from "./pages/admin/Rosters";
-import AdminMatches from "./pages/admin/Matches";
-import AdminTournaments from "./pages/admin/Tournaments";
-import FutsalTournament from "./pages/admin/FutsalTournament";
-import VoleiTournament from "./pages/admin/VoleiTournament";
-import FIFATournament from "./pages/admin/FIFATournament";
+
+// Páginas admin: carregadas só quando um admin abre (o público não baixa esse código)
+const Admin = lazy(() => import("./pages/Admin"));
+const AdminRosters = lazy(() => import("./pages/admin/Rosters"));
+const AdminMatches = lazy(() => import("./pages/admin/Matches"));
+const AdminTournaments = lazy(() => import("./pages/admin/Tournaments"));
+const FutsalTournament = lazy(() => import("./pages/admin/FutsalTournament"));
+const VoleiTournament = lazy(() => import("./pages/admin/VoleiTournament"));
+const FIFATournament = lazy(() => import("./pages/admin/FIFATournament"));
 
 // Componente simples de loading
 function LoadingFallback() {
@@ -69,8 +71,10 @@ export default function App() {
             {/* Logo */}
             <Link to="/" className="hover:opacity-90 transition-opacity">
               <img
-                src="/logo-copa-influence.png"
+                src="/logo-copa-influence.webp"
                 alt="Copa Influence"
+                width="172"
+                height="160"
                 className="h-12 md:h-16 w-auto"
               />
             </Link>
@@ -126,6 +130,9 @@ export default function App() {
 
       {/* MAIN */}
       <main className="flex-1 container mx-auto p-4">
+        {/* key: ao trocar de página, um erro anterior não "prende" a tela */}
+        <ErrorBoundary key={location.pathname}>
+        <Suspense fallback={<LoadingFallback />}>
         <Routes>
           {/* Rotas públicas */}
           <Route path="/" element={<Home />} />
@@ -167,6 +174,8 @@ export default function App() {
             }
           />
         </Routes>
+        </Suspense>
+        </ErrorBoundary>
       </main>
 
       {/* FOOTER */}

@@ -2,12 +2,13 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../supabaseClient';
 import { useNavigate, useSearchParams } from 'react-router-dom';
+import { safeRedirect } from '../lib/safeRedirect';
 
 export default function Login() {
   const navigate = useNavigate();
   const [sp] = useSearchParams();
 
-  const redirectTo = sp.get('redirect') || '/';
+  const redirectTo = safeRedirect(sp.get('redirect'));
   const reason = sp.get('reason');
 
   const [email, setEmail] = useState('');

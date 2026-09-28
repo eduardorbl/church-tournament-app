@@ -46,7 +46,7 @@ class ErrorBoundary extends React.Component {
   render() {
     if (this.state.hasError) {
       return (
-        <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="flex items-center justify-center py-12">
           <div className="text-center max-w-md mx-auto p-6">
             <div className="mb-6">
               <div className="mx-auto flex items-center justify-center h-16 w-16 rounded-full bg-red-100 mb-4">
@@ -87,7 +87,7 @@ class ErrorBoundary extends React.Component {
             </div>
 
             {/* Detalhes do erro em modo desenvolvimento */}
-            {process.env.NODE_ENV === 'development' && this.state.error && (
+            {import.meta.env.DEV && this.state.error && (
               <details className="mt-6 text-left">
                 <summary className="cursor-pointer text-sm text-gray-500 hover:text-gray-700">
                   Detalhes técnicos (dev)

@@ -6,6 +6,7 @@ const AuthContext = createContext({
   session: null,
   user: null,
   isAdmin: false,
+  adminChecked: false,
   needsPasswordSetup: false,
   ready: false,
   loading: false,
@@ -22,12 +23,15 @@ export function useAuth() {
 export function AuthProvider({ children }) {
   const [session, setSession] = useState(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  // true só depois que o is_admin() respondeu para o usuário atual
+  const [adminChecked, setAdminChecked] = useState(false);
   const [needsPasswordSetup, setNeedsPasswordSetup] = useState(false);
   const [ready, setReady] = useState(false);
   const [loading, setLoading] = useState(true);
 
   const mountedRef = useRef(true);
   const lastCheckId = useRef(0);
+  const currentUserId = useRef(null);
 
   const hasPassword = (user) => user?.user_metadata?.password_set === true;
 
@@ -55,13 +59,15 @@ export function AuthProvider({ children }) {
         if (initial?.user?.id) {
           void checkAdmin(initial);
         } else {
-          setIsAdmin(false);
+          resetAdmin(null);
+          setAdminChecked(true);
         }
       } catch (e) {
         console.error("Auth init error:", e);
         if (!mountedRef.current) return;
         setSession(null);
-        setIsAdmin(false);
+        resetAdmin(null);
+        setAdminChecked(true);
         setNeedsPasswordSetup(false);
         setReady(true);
         setLoading(false);
@@ -70,20 +76,25 @@ export function AuthProvider({ children }) {
 
     // Reage a QUALQUER mudança de auth
     const { data: subscriptionWrapper } = supabase.auth.onAuthStateChange(
-      async (_event, newSession) => {
+      async (event, newSession) => {
         if (!mountedRef.current) return;
         setSession(newSession ?? null);
 
         // não trava a UI; checa admin/flags em paralelo
         if (newSession?.user) {
-          setNeedsPasswordSetup(!hasPassword(newSession.user));
+          // Link de recuperação de senha: sempre pedir a nova senha
+          setNeedsPasswordSetup(
+            event === "PASSWORD_RECOVERY" || !hasPassword(newSession.user)
+          );
           if (newSession.user.id) {
             void checkAdmin(newSession);
           } else {
-            setIsAdmin(false);
+            resetAdmin(null);
+            setAdminChecked(true);
           }
         } else {
-          setIsAdmin(false);
+          resetAdmin(null);
+          setAdminChecked(true);
           setNeedsPasswordSetup(false);
         }
       }
@@ -95,28 +106,42 @@ export function AuthProvider({ children }) {
     };
   }, []);
 
-  // Checagem resiliente de admin (não lança erro na UI)
+  // Troca de usuário: nunca herdar o isAdmin do usuário anterior
+  function resetAdmin(userId) {
+    if (currentUserId.current !== userId) {
+      currentUserId.current = userId;
+      setIsAdmin(false);
+      setAdminChecked(false);
+    }
+  }
+
+  // Checagem resiliente de admin (não lança erro na UI; em erro, nega acesso)
   const checkAdmin = async (sess) => {
     const checkId = ++lastCheckId.current;
+    const userId = sess?.user?.id ?? null;
+    resetAdmin(userId);
 
     try {
-      const userId = sess?.user?.id;
       if (!userId) {
         if (mountedRef.current && checkId === lastCheckId.current) {
           setIsAdmin(false);
+          setAdminChecked(true);
         }
         return;
       }
 
       const { data, error } = await supabase.rpc("is_admin");
+      if (error) console.error("is_admin error:", error.message);
 
       if (mountedRef.current && checkId === lastCheckId.current) {
         setIsAdmin(Boolean(data) && !error);
+        setAdminChecked(true);
       }
     } catch (e) {
       console.error("checkAdmin error:", e);
       if (mountedRef.current && checkId === lastCheckId.current) {
         setIsAdmin(false);
+        setAdminChecked(true);
       }
     }
   };
@@ -132,14 +157,22 @@ export function AuthProvider({ children }) {
     return result;
   };
 
-  // Logout
+  // Logout: limpa o estado local mesmo se a chamada ao servidor falhar
   const signOut = async () => {
-    const { error } = await supabase.auth.signOut();
-    if (!error) {
-      setSession(null);
-      setIsAdmin(false);
-      setNeedsPasswordSetup(false);
+    let error = null;
+    try {
+      ({ error } = await supabase.auth.signOut());
+    } catch (e) {
+      error = e;
     }
+    if (error) {
+      // garante que a sessão local também saia
+      try { await supabase.auth.signOut({ scope: "local" }); } catch { /* ignora */ }
+    }
+    setSession(null);
+    resetAdmin(null);
+    setAdminChecked(true);
+    setNeedsPasswordSetup(false);
     return { error };
   };
 
@@ -168,7 +201,8 @@ export function AuthProvider({ children }) {
       setNeedsPasswordSetup(!hasPassword(s.user));
       void checkAdmin(s);
     } else {
-      setIsAdmin(false);
+      resetAdmin(null);
+      setAdminChecked(true);
       setNeedsPasswordSetup(false);
     }
   };
@@ -177,6 +211,7 @@ export function AuthProvider({ children }) {
     session,
     user: session?.user ?? null,
     isAdmin,
+    adminChecked,
     needsPasswordSetup,
     ready,
     loading,
