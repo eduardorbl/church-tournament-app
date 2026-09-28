@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { supabase } from "../supabaseClient";
 import TeamBadge from "../components/TeamBadge";
+import useLiveRefetch from "../hooks/useLiveRefetch";
 
 // Storage
 const LOGO_BUCKET = "team-logos";
@@ -217,11 +218,14 @@ export default function TeamPage() {
   const [matches, setMatches] = useState([]);
   const [loading, setLoading] = useState(true);
   const [currentTimestamp, setCurrentTimestamp] = useState(Date.now());
-  const channelRef = useRef(null);
   const timerRef = useRef(null);
+  const loadedIdRef = useRef(null); // skeleton só na 1ª carga de cada time
+  const matchIdsRef = useRef(new Set()); // ids das partidas exibidas (filtro do realtime)
 
-  const load = async () => {
-    setLoading(true);
+  // Chamado pelo useLiveRefetch (serializado/coalescido).
+  const load = async ({ isCurrent }) => {
+    const isInitial = loadedIdRef.current !== id;
+    if (isInitial) setLoading(true);
     try {
       // 1) Carrega dados do time
       const { data: teamData, error: teamError } = await supabase
@@ -234,8 +238,11 @@ export default function TeamPage() {
         console.error("Erro ao carregar time:", teamError);
         return;
       }
+      if (!isCurrent()) return; // resposta de requisição superada
 
-      if (teamData) {
+      if (!teamData) {
+        setTeam(null);
+      } else {
         // Normaliza logo do time
         const normalizedTeam = {
           ...teamData,
@@ -255,6 +262,7 @@ export default function TeamPage() {
         .order("number", { ascending: true, nullsFirst: true })
         .order("name");
 
+      if (!isCurrent()) return;
       if (!playersError && playersData) {
         setPlayers(playersData);
       }
@@ -272,6 +280,7 @@ export default function TeamPage() {
         .or(`home_team_id.eq.${id},away_team_id.eq.${id}`)
         .order("starts_at", { ascending: false });
 
+      if (!isCurrent()) return;
       if (!matchesError && matchesData) {
         // Normaliza logos das partidas
         const normalizedMatches = matchesData.map((m) => {
@@ -299,53 +308,48 @@ export default function TeamPage() {
         });
 
         setMatches(normalizedMatches);
+        matchIdsRef.current = new Set(normalizedMatches.map((m) => String(m.id)));
       }
+      loadedIdRef.current = id;
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   };
 
-  useEffect(() => {
-    load();
+  // Realtime. Não dá para filtrar matches por home OU away no servidor, então
+  // filtra no cliente: só recarrega se o evento envolve este time ou uma partida
+  // já exibida (cobre UPDATE/DELETE em que payload.old só traz o id).
+  const touchesThisTeam = (payload) => {
+    const tid = String(id);
+    const rows = [payload?.new, payload?.old].filter(Boolean);
+    return rows.some(
+      (r) =>
+        String(r.home_team_id) === tid ||
+        String(r.away_team_id) === tid ||
+        (r.id != null && matchIdsRef.current.has(String(r.id)))
+    );
+  };
 
+  useLiveRefetch({
+    channelKey: `team-${id}`,
+    enabled: !!id,
+    refetch: load,
+    subscriptions: [
+      { table: "matches", shouldRefetch: touchesThisTeam },
+      { table: "teams", filter: `id=eq.${id}` },
+      { table: "players", filter: `team_id=eq.${id}` },
+    ],
+  });
+
+  useEffect(() => {
     // Timer para atualizar o timestamp a cada segundo
     timerRef.current = setInterval(() => {
       setCurrentTimestamp(Date.now());
     }, 1000);
 
-    // Realtime
-    if (channelRef.current) {
-      supabase.removeChannel(channelRef.current);
-      channelRef.current = null;
-    }
-
-    const channel = supabase
-      .channel(`team-${id}`)
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "matches" },
-        () => load()
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "teams", filter: `id=eq.${id}` },
-        () => load()
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "players", filter: `team_id=eq.${id}` },
-        () => load()
-      )
-      .subscribe();
-
-    channelRef.current = channel;
-
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
-      if (channelRef.current) supabase.removeChannel(channelRef.current);
-      channelRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   const groupedMatches = useMemo(() => {

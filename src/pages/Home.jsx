@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Link } from "react-router-dom";
 import { supabase } from "../supabaseClient";
 import TeamBadge from "../components/TeamBadge";
+import useLiveRefetch from "../hooks/useLiveRefetch";
 import {
   Trophy,
   Megaphone,
@@ -136,17 +137,13 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [flash, setFlash] = useState(null);
   const [now, setNow] = useState(Date.now());
-  const mountedRef = useRef(true);
-  const reloadingRef = useRef(false);
   const blocksRef = useRef({});
 
-  const load = async () => {
-    if (reloadingRef.current) return;
-    reloadingRef.current = true;
+  // Chamado pelo useLiveRefetch (serializado/coalescido). Skeleton só na 1ª carga.
+  const load = async ({ isCurrent = () => true } = {}) => {
     if (!Object.keys(blocksRef.current || {}).length) {
       setLoading(true);
     }
-    setFlash(null);
 
     try {
       // 1) Esportes existentes
@@ -330,14 +327,16 @@ export default function Home() {
         })
       );
 
+      if (!isCurrent()) return; // resposta de requisição superada
       const mapped = Object.fromEntries(results);
       blocksRef.current = mapped;
       setBlocks(mapped);
+      setFlash(null);
     } catch (e) {
+      if (!isCurrent()) return;
       setFlash(`Falha ao carregar a Home: ${e.message || e}`);
     } finally {
-      setLoading(false);
-      reloadingRef.current = false;
+      if (isCurrent()) setLoading(false);
     }
   };
 
@@ -436,38 +435,32 @@ export default function Home() {
     return didLocalPatch;
   }, []);
 
-  useEffect(() => {
-    mountedRef.current = true;
-    load();
+  // realtime: mudanças em matches e match_events → patch local ou recarrega (coalescido)
+  const { reconnecting, refresh } = useLiveRefetch({
+    channelKey: "home-central",
+    refetch: load,
+    subscriptions: [
+      {
+        table: "matches",
+        shouldRefetch: (payload, { refetching }) => {
+          const eventType = payload?.eventType || payload?.type;
+          const row = payload?.new;
+          // Durante um refetch em voo, não aplica patch (a resposta em voo pode
+          // estar desatualizada); só marca para recarregar de novo ao terminar.
+          if (eventType === "UPDATE" && row?.id && !refetching) {
+            return !patchMatchFromRealtime(row);
+          }
+          return true;
+        },
+      },
+      { table: "match_events" },
+    ],
+  });
 
+  useEffect(() => {
     // timer p/ clock “Ao vivo”
     const t = setInterval(() => setNow(Date.now()), 1000);
-
-    // realtime: mudanças em matches e match_events → recarrega
-    const ch = supabase
-      .channel("home-central")
-      .on("postgres_changes", { event: "*", schema: "public", table: "matches" }, (payload) => {
-        if (!mountedRef.current) return;
-        const eventType = payload?.eventType || payload?.type;
-        const row = payload?.new;
-        if (eventType === "UPDATE" && row?.id) {
-          const handled = patchMatchFromRealtime(row);
-          if (!handled) {
-            load();
-          }
-        } else {
-          load();
-        }
-      })
-      .on("postgres_changes", { event: "*", schema: "public", table: "match_events" }, () => mountedRef.current && load())
-      .subscribe();
-
-    return () => {
-      mountedRef.current = false;
-      clearInterval(t);
-      supabase.removeChannel(ch);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    return () => clearInterval(t);
   }, []);
 
   const orderedKeys = useMemo(() => {
@@ -492,9 +485,12 @@ export default function Home() {
         <div className="flex items-center gap-2">
           <Trophy className="h-6 w-6 text-blue-600" />
           <h1 className="text-2xl font-bold tracking-tight">Central do Evento</h1>
+          {reconnecting && (
+            <span className="text-xs font-medium text-amber-600" role="status">reconectando…</span>
+          )}
         </div>
         <button
-          onClick={load}
+          onClick={refresh}
           className="inline-flex items-center gap-2 rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
           title="Recarregar agora"
         >

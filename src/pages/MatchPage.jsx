@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useRef, useState, useCallback } from "react"
 import { useParams, Link } from "react-router-dom";
 import { supabase } from "../supabaseClient";
 import TeamBadge from "../components/TeamBadge";
+import useLiveRefetch from "../hooks/useLiveRefetch";
 
 const STATUS_LABEL = {
   scheduled: "Agendado",
@@ -242,21 +243,24 @@ export default function MatchPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [currentTimestamp, setCurrentTimestamp] = useState(Date.now());
-  const channelRef = useRef(null);
   const timerRef = useRef(null);
-  const loadingRef = useRef(false);
+  const loadedIdRef = useRef(null); // id da partida já exibida (skeleton só na 1ª carga)
+  const rosterKeyRef = useRef(null); // "homeId|awayId" dos elencos já carregados
 
   const isVolei = useMemo(
     () => (match?.sport?.name || "").toLowerCase().includes("volei"),
     [match?.sport?.name]
   );
 
-  const load = useCallback(async () => {
-    if (!id || loadingRef.current) return;
+  // Chamado pelo useLiveRefetch (serializado/coalescido).
+  const load = useCallback(async ({ isCurrent }) => {
+    if (!id) return;
 
-    loadingRef.current = true;
-    setLoading(true);
-    setError(null);
+    const isInitial = loadedIdRef.current !== id;
+    if (isInitial) {
+      setLoading(true);
+      setError(null);
+    }
 
     try {
       // 1) Tenta pela view agregada (inclui order_idx para exibirmos "Jogo x")
@@ -364,9 +368,14 @@ export default function MatchPage() {
       }
 
       if (!m) throw new Error("Partida não encontrada");
+      if (!isCurrent()) return; // resposta de requisição superada
       setMatch(m);
+      setError(null);
+      loadedIdRef.current = id;
 
-      // 3) Elencos (se existirem times)
+      // 3) Elencos (se existirem times) — só recarrega se os times mudaram
+      const rosterKey = `${m?.home?.id ?? ""}|${m?.away?.id ?? ""}`;
+      if (rosterKeyRef.current === rosterKey && !isInitial) return;
       const playerPromises = [];
       if (m?.home?.id) {
         playerPromises.push(
@@ -395,21 +404,56 @@ export default function MatchPage() {
       }
 
       const [homeRes, awayRes] = await Promise.all(playerPromises);
+      if (!isCurrent()) return;
       setHomePlayers(homeRes.data || []);
       setAwayPlayers(awayRes.data || []);
+      rosterKeyRef.current = rosterKey;
     } catch (err) {
+      if (!isCurrent()) return;
       console.error("Error loading match:", err);
-      setError(err.message || "Erro ao carregar partida");
+      // Em refresh de 2º plano, mantém a partida na tela em vez de trocar por erro.
+      if (loadedIdRef.current !== id) setError(err.message || "Erro ao carregar partida");
     } finally {
-      setLoading(false);
-      loadingRef.current = false;
+      if (isCurrent()) setLoading(false);
     }
   }, [id]);
 
+  // Realtime: qualquer mudança na partida (placar, times, fase, local…) ou nos
+  // eventos → refetch coalescido. O patch local só dá resposta instantânea ao placar.
+  const { reconnecting, refresh } = useLiveRefetch({
+    channelKey: `match-${id}`,
+    enabled: !!id,
+    refetch: load,
+    subscriptions: [
+      {
+        table: "matches",
+        filter: `id=eq.${id}`,
+        shouldRefetch: (payload, { refetching }) => {
+          const row = payload?.new;
+          // Com refetch em voo a resposta dele pode estar velha; o refetch extra corrige.
+          if (row && !refetching) {
+            setMatch((prev) => {
+              if (!prev || String(prev.id) !== String(row.id)) return prev;
+              return {
+                ...prev,
+                status: row.status ?? prev.status,
+                starts_at: row.starts_at ?? prev.starts_at,
+                updated_at: row.updated_at ?? prev.updated_at,
+                home_score: typeof row.home_score === "number" ? row.home_score : prev.home_score,
+                away_score: typeof row.away_score === "number" ? row.away_score : prev.away_score,
+                meta: row.meta ?? prev.meta,
+              };
+            });
+          }
+          return true;
+        },
+      },
+      { table: "match_events", filter: `match_id=eq.${id}` },
+    ],
+  });
+
   useEffect(() => {
     if (!id) return;
-
-    load();
 
     // Tick de relógio por segundo (🕐)
     if (timerRef.current) clearInterval(timerRef.current);
@@ -417,54 +461,13 @@ export default function MatchPage() {
       setCurrentTimestamp(Date.now());
     }, 1000);
 
-    // Realtime: match + eventos
-    if (channelRef.current) {
-      supabase.removeChannel(channelRef.current);
-      channelRef.current = null;
-    }
-
-    const channel = supabase
-      .channel(`match-${id}`)
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "matches", filter: `id=eq.${id}` },
-        (payload) => {
-          const row = payload?.new;
-          if (!row) return;
-          setMatch((prev) => {
-            if (!prev) return prev;
-            return {
-              ...prev,
-              status: row.status ?? prev.status,
-              starts_at: row.starts_at ?? prev.starts_at,
-              updated_at: row.updated_at ?? prev.updated_at,
-              home_score: typeof row.home_score === "number" ? row.home_score : prev.home_score,
-              away_score: typeof row.away_score === "number" ? row.away_score : prev.away_score,
-              meta: row.meta ?? prev.meta,
-            };
-          });
-        }
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "match_events", filter: `match_id=eq.${id}` },
-        () => load()
-      )
-      .subscribe();
-
-    channelRef.current = channel;
-
     return () => {
       if (timerRef.current) {
         clearInterval(timerRef.current);
         timerRef.current = null;
       }
-      if (channelRef.current) {
-        supabase.removeChannel(channelRef.current);
-        channelRef.current = null;
-      }
     };
-  }, [id, load]);
+  }, [id]);
 
   const metaCenter = useMemo(
     () => (match ? formatMetaLine(match) : ""),
@@ -500,7 +503,7 @@ export default function MatchPage() {
         <button
           onClick={() => {
             setError(null);
-            load();
+            refresh();
           }}
           className="bg-blue-600 text-white px-4 py-2 rounded-xl hover:bg-blue-700"
         >
@@ -540,6 +543,9 @@ export default function MatchPage() {
             <div className="text-xs text-gray-600" aria-label="Detalhes">
               {metaCenter}
             </div>
+          )}
+          {reconnecting && (
+            <span className="text-[11px] font-medium text-amber-600" role="status">reconectando…</span>
           )}
         </div>
         <div className="text-xs text-gray-500">

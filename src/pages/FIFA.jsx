@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useRef, useState, useCallback } from "react"
 import { Link } from "react-router-dom";
 import { supabase } from "../supabaseClient";
 import TeamBadge from "../components/TeamBadge";
+import useLiveRefetch from "../hooks/useLiveRefetch";
 
 /* ──────────────────────────────────────────────────────────────────────────────
    Hub FIFA — Mata-mata desde o início
@@ -220,9 +221,7 @@ export default function FIFA() {
   const [sportId, setSportId] = useState(null);
   const [matches, setMatches] = useState([]);
   const [queueSlots, setQueueSlots] = useState({ live: [], call: [], next: [] });
-  const [loading, setLoading] = useState(true);
-  const channelRef = useRef(null);
-  const reloadingRef = useRef(false);
+  const [loading, setLoading] = useState(true); // só a 1ª carga mostra skeleton
 
   const loadSportId = useCallback(async () => {
     const { data, error } = await supabase.from("sports").select("id").eq("name", "FIFA").maybeSingle();
@@ -303,10 +302,10 @@ export default function FIFA() {
         return String(a.id || "").localeCompare(String(b.id || ""));
       });
 
-      setMatches(rows);
+      return rows;
     } catch (e) {
       console.error("Exceção loadMatches:", e);
-      setMatches([]);
+      return null; // mantém os dados atuais
     }
   }, []);
 
@@ -323,53 +322,36 @@ export default function FIFA() {
           bySlot[row.slot].push(row);
         }
       });
-      setQueueSlots(bySlot);
+      return bySlot;
     } catch (e) {
       console.error("Exceção loadQueue:", e);
-      setQueueSlots({ live: [], call: [], next: [] });
+      return null; // mantém os dados atuais
     }
   }, []);
 
-  const loadAll = useCallback(async (sid) => {
-    if (reloadingRef.current) return;
-    reloadingRef.current = true;
-    setLoading(true);
+  // Chamado pelo useLiveRefetch (serializado/coalescido); refresh em 2º plano não mostra skeleton.
+  const loadAll = useCallback(async ({ isCurrent }) => {
     try {
-      await Promise.all([loadMatches(sid), loadQueue(sid)]);
+      const [rows, bySlot] = await Promise.all([loadMatches(sportId), loadQueue(sportId)]);
+      if (!isCurrent()) return; // resposta de requisição superada
+      if (rows) setMatches(rows);
+      if (bySlot) setQueueSlots(bySlot);
     } finally {
-      setLoading(false);
-      reloadingRef.current = false;
+      if (isCurrent()) setLoading(false);
     }
-  }, [loadMatches, loadQueue]);
+  }, [sportId, loadMatches, loadQueue]);
 
   useEffect(() => {
     loadSportId();
   }, [loadSportId]);
 
-  useEffect(() => {
-    if (!sportId) return;
-    loadAll(sportId);
-
-    // Realtime
-    if (channelRef.current) {
-      try { supabase.removeChannel(channelRef.current); } catch {}
-      channelRef.current = null;
-    }
-    const ch = supabase
-      .channel(`fifa-hub-${sportId}`)
-      .on("postgres_changes", { event: "*", schema: "public", table: "matches", filter: `sport_id=eq.${sportId}` }, () => {
-        loadAll(sportId);
-      })
-      .subscribe();
-    channelRef.current = ch;
-
-    return () => {
-      if (channelRef.current) {
-        try { supabase.removeChannel(channelRef.current); } catch {}
-        channelRef.current = null;
-      }
-    };
-  }, [sportId, loadAll]);
+  // Realtime
+  useLiveRefetch({
+    channelKey: `fifa-hub-${sportId}`,
+    enabled: !!sportId,
+    refetch: loadAll,
+    subscriptions: [{ table: "matches", filter: `sport_id=eq.${sportId}` }],
+  });
 
   /* ── Derivações ──────────────────────────────────────────────────────────── */
   const placeholdersFor = useCallback((orderIdx, stage) => {

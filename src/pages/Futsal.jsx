@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useRef, useState, useCallback } from "react"
 import { Link } from "react-router-dom";
 import { supabase } from "../supabaseClient";
 import TeamBadge from "../components/TeamBadge";
+import useLiveRefetch from "../hooks/useLiveRefetch";
 import { HelpCircle } from "lucide-react";
 
 /* =========================
@@ -422,6 +423,7 @@ function StandingsTable({ standings, teamsById }) {
       {groupKeys.map((g) => (
         <div key={g} className="overflow-hidden rounded-2xl border bg-white shadow-sm">
           <div className="border-b bg-gray-50 px-3 py-2 text-sm font-semibold">Grupo {g}</div>
+          <div className="overflow-x-auto">
           <table className="min-w-full text-xs sm:text-sm">
             <thead>
               <tr className="border-b text-gray-600">
@@ -466,6 +468,7 @@ function StandingsTable({ standings, teamsById }) {
               })}
             </tbody>
           </table>
+          </div>
           <div className="px-3 py-2 text-[10px] text-gray-500">Critérios: Pontos, Vitórias, Saldo de Gols, Gols Pró.</div>
         </div>
       ))}
@@ -500,10 +503,7 @@ export default function Futsal() {
   const [groupFilter, setGroupFilter] = useState("todos");
   const [stageFilter, setStageFilter] = useState("todos");
 
-  const channelRef = useRef(null);
-  const refreshTimerRef = useRef(null);
-
-  /* Loaders */
+  /* Loaders — retornam os dados (ou null em erro, para manter o que já está na tela) */
   const loadSportId = useCallback(async () => {
     try {
       const { data, error } = await supabase.from("sports").select("id").eq("name", "Futsal").maybeSingle();
@@ -513,10 +513,12 @@ export default function Futsal() {
       } else {
         console.warn("⚠️ Esporte 'Futsal' não encontrado na tabela sports.");
         setSportId(null);
+        setLoading(false); // sem esporte não há carga: sai do skeleton
       }
     } catch (e) {
       console.error("Exceção loadSportId:", e);
       setSportId(null);
+      setLoading(false);
     }
   }, []);
 
@@ -539,8 +541,7 @@ export default function Futsal() {
               group_name: t.group_name ?? "-",
             };
           }
-          setTeamsById(map);
-          return;
+          return map;
         }
       }
 
@@ -561,10 +562,10 @@ export default function Futsal() {
           group_name: t.group_name ?? "-",
         };
       }
-      setTeamsById(map);
+      return map;
     } catch (e) {
       console.error("Exceção loadTeams:", e);
-      setTeamsById({});
+      return null;
     }
   }, []);
 
@@ -580,8 +581,7 @@ export default function Futsal() {
           .order("rank", { ascending: true });
 
         if (!v.error && Array.isArray(v.data) && v.data.length > 0) {
-          setStandings(v.data);
-          return;
+          return v.data;
         }
       }
 
@@ -594,8 +594,7 @@ export default function Futsal() {
         .order("rank", { ascending: true });
 
       if (!v2.error && Array.isArray(v2.data) && v2.data.length > 0) {
-        setStandings(v2.data.map(({ sport, ...r }) => r));
-        return;
+        return v2.data.map(({ sport, ...r }) => r);
       }
 
       // 3) TABELA por sport_id
@@ -613,8 +612,7 @@ export default function Futsal() {
           .order("rank", { ascending: true });
 
         if (!j.error && Array.isArray(j.data) && j.data.length > 0) {
-          setStandings(j.data.map((r) => ({ ...r, team_name: r.team?.name })));
-          return;
+          return j.data.map((r) => ({ ...r, team_name: r.team?.name }));
         }
       }
 
@@ -633,10 +631,10 @@ export default function Futsal() {
         .order("rank", { ascending: true });
 
       const rows2 = (j2.data || []).map((r) => ({ ...r, team_name: r.team?.name }));
-      setStandings(rows2);
+      return rows2;
     } catch (e) {
       console.error("Exceção loadStandings:", e);
-      setStandings([]);
+      return null;
     }
   }, []);
 
@@ -711,23 +709,31 @@ export default function Futsal() {
         return (phaseRank[a.stage] ?? 99) - (phaseRank[b.stage] ?? 99);
       });
 
-      setMatches(rows);
+      return rows;
     } catch (e) {
       console.error("Exceção loadMatches:", e);
-      setMatches([]);
+      return null;
     }
   }, []);
 
+  // Chamado pelo useLiveRefetch (serializado/coalescido); skeleton só na 1ª carga (loading inicia true).
   const loadAll = useCallback(
-    async (sid, { skeleton = false } = {}) => {
-      if (skeleton) setLoading(true);
+    async ({ isCurrent }) => {
       try {
-        await Promise.all([loadTeams(sid), loadStandings(sid), loadMatches(sid)]);
+        const [teams, stand, rows] = await Promise.all([
+          loadTeams(sportId),
+          loadStandings(sportId),
+          loadMatches(sportId),
+        ]);
+        if (!isCurrent()) return; // resposta de requisição superada
+        if (teams) setTeamsById(teams);
+        if (stand) setStandings(stand);
+        if (rows) setMatches(rows);
       } finally {
-        setLoading(false);
+        if (isCurrent()) setLoading(false);
       }
     },
-    [loadTeams, loadStandings, loadMatches]
+    [sportId, loadTeams, loadStandings, loadMatches]
   );
 
   /* Effects */
@@ -735,53 +741,17 @@ export default function Futsal() {
     loadSportId();
   }, [loadSportId]);
 
-  useEffect(() => {
-    if (!sportId) {
-      setLoading(false);
-      return;
-    }
-    loadAll(sportId, { skeleton: true });
-
-    // Realtime com debounce
-    if (channelRef.current) {
-      try { supabase.removeChannel(channelRef.current); } catch {}
-      channelRef.current = null;
-    }
-    const ch = supabase
-      .channel(`futsal-hub`)
-      .on(
-        "postgres_changes",
-        sportId
-          ? { event: "*", schema: "public", table: "matches", filter: `sport_id=eq.${sportId}` }
-          : { event: "*", schema: "public", table: "matches" },
-        () => {
-          if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
-          refreshTimerRef.current = setTimeout(() => loadAll(sportId, { skeleton: false }), 200);
-        }
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "standings" },
-        () => {
-          if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
-          refreshTimerRef.current = setTimeout(() => loadAll(sportId, { skeleton: false }), 200);
-        }
-      )
-      .subscribe();
-
-    channelRef.current = ch;
-
-    return () => {
-      if (refreshTimerRef.current) {
-        clearTimeout(refreshTimerRef.current);
-        refreshTimerRef.current = null;
-      }
-      if (channelRef.current) {
-        try { supabase.removeChannel(channelRef.current); } catch {}
-        channelRef.current = null;
-      }
-    };
-  }, [sportId, loadAll]);
+  // Realtime com debounce/coalescência
+  useLiveRefetch({
+    channelKey: `futsal-hub-${sportId}`,
+    enabled: !!sportId,
+    refetch: loadAll,
+    debounceMs: 200,
+    subscriptions: [
+      { table: "matches", filter: `sport_id=eq.${sportId}` },
+      { table: "standings" },
+    ],
+  });
 
   /* Derivações */
   const hasGroups = useMemo(() => {

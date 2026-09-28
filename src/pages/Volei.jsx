@@ -3,6 +3,7 @@ import React, { useEffect, useMemo, useRef, useState, useCallback } from "react"
 import { Link } from "react-router-dom";
 import { supabase } from "../supabaseClient";
 import TeamBadge from "../components/TeamBadge";
+import useLiveRefetch from "../hooks/useLiveRefetch";
 import { HelpCircle } from "lucide-react";
 
 const SPORT_LABEL = "Vôlei";
@@ -311,6 +312,7 @@ function StandingsTable({ standings, teamsById }) {
       {groupKeys.map((g) => (
         <div key={g} className="overflow-hidden rounded-2xl border bg-white shadow-sm">
           <div className="border-b bg-gray-50 px-3 py-2 text-sm font-semibold">Grupo {g}</div>
+          <div className="overflow-x-auto">
           <table className="min-w-full text-xs sm:text-sm">
             <thead>
               <tr className="border-b text-gray-600">
@@ -354,6 +356,7 @@ function StandingsTable({ standings, teamsById }) {
               })}
             </tbody>
           </table>
+          </div>
           <div className="px-3 py-2 text-[10px] text-gray-500">
             Critérios/colunas: <strong>#</strong> (posição), <strong>Time</strong>, <strong>P</strong> (jogos), <strong>V</strong> (vitórias), <strong>D</strong> (derrotas), <strong>SV</strong> (sets vencidos), <strong>SP</strong> (sets perdidos), <strong>PF</strong> (pontos feitos), <strong>PC</strong> (pontos contra), <strong>+/-</strong> (saldo de pontos), <strong>Pts</strong> (pontos na tabela).
           </div>
@@ -483,9 +486,6 @@ export default function Volei() {
   const [groupFilter, setGroupFilter] = useState("todos");
   const [stageFilter, setStageFilter] = useState("todos");
 
-  const channelRef = useRef(null);
-  const refreshTimerRef = useRef(null);
-
   const loadSportId = useCallback(async () => {
     try {
       // busca por quaisquer variações de nome
@@ -501,10 +501,12 @@ export default function Volei() {
       } else {
         console.warn("⚠️ Esporte Vôlei não encontrado em 'sports' (nomes tentados:", SPORT_NAMES.join(", "), ")");
         setSportId(null);
+        setLoading(false); // sem esporte não há carga: sai do skeleton
       }
     } catch (e) {
       console.error("Exceção loadSportId:", e);
       setSportId(null);
+      setLoading(false);
     }
   }, []);  
 
@@ -522,9 +524,7 @@ export default function Volei() {
               logo_url: normalizeLogo(t.logo_url),
             };
           }
-          setTeamsById(map);
-          teamsRef.current = map;
-          return; // só retorna se achou times
+          return map; // só retorna se achou times
         }
       }
       // 2) fallback por NOME (join)
@@ -542,12 +542,10 @@ export default function Volei() {
           logo_url: normalizeLogo(t.logo_url),
         };
       }
-      setTeamsById(map);
-      teamsRef.current = map; // mantém o ref sincronizado
+      return map;
     } catch (e) {
       console.error("Exceção loadTeams:", e);
-      setTeamsById({});
-      teamsRef.current = {};
+      return null; // mantém os dados atuais
     }
   }, []);  
 
@@ -564,8 +562,7 @@ export default function Volei() {
   
         if (!v.error && Array.isArray(v.data) && v.data.length > 0) {
           console.info("[Vôlei] standings via VIEW/sport_id:", v.data.length);
-          setStandings(v.data);
-          return;
+          return v.data;
         }
       }
   
@@ -595,8 +592,7 @@ export default function Volei() {
   
         if (!j.error && rowsSid.length > 0) {
           console.info("[Vôlei] standings via TABLE/sport_id:", rowsSid.length);
-          setStandings(rowsSid);
-          return;
+          return rowsSid;
         }
       }
   
@@ -625,16 +621,16 @@ export default function Volei() {
       }));
   
       console.info("[Vôlei] standings via TABLE/join por nome:", rowsByName.length, "— esportes possíveis:", SPORT_NAMES);
-      setStandings(rowsByName);
+      return rowsByName;
     } catch (e) {
       console.error("Exceção loadStandings (vôlei):", e);
-      setStandings([]);
+      return null;
     }
   }, []);  
 
-  const loadMatches = useCallback(async (sid) => {
+  const loadMatches = useCallback(async (sid, teams) => {
     try {
-      if (!sid) { setMatches([]); return; }
+      if (!sid) return [];
       const { data, error } = await supabase
         .from("matches")
         .select(`
@@ -644,7 +640,8 @@ export default function Volei() {
         `)
         .eq("sport_id", sid);
       if (error) throw error;
-      const mkTeam = (id) => (id ? ({ ...(teamsRef.current[id] || {}), id, name: String((teamsRef.current[id]?.name ?? "A definir")) }) : { name: "A definir" });
+      const tmap = teams || teamsRef.current;
+      const mkTeam = (id) => (id ? ({ ...(tmap[id] || {}), id, name: String((tmap[id]?.name ?? "A definir")) }) : { name: "A definir" });
       const rows = (data || []).map((r) => {
         const numericOrder = Number(r.order_idx);
         const orderKey = Number.isFinite(numericOrder) ? numericOrder : Number.MAX_SAFE_INTEGER;
@@ -678,57 +675,44 @@ export default function Volei() {
         if (timeDiff !== 0) return timeDiff;
         return ts(a.updated_at) - ts(b.updated_at);
       });
-      setMatches(rows);
       console.info("[Vôlei] matches carregados:", rows.length);
+      return rows;
     } catch (e) {
       console.error("Exceção loadMatches (vôlei):", e);
-      setMatches([]);
+      return null; // mantém os dados atuais
     }
   }, []);  
 
+  // Chamado pelo useLiveRefetch (serializado/coalescido); skeleton só na 1ª carga (loading inicia true).
   const loadAll = useCallback(
-    async (sid, { skeleton = false } = {}) => {
-      if (skeleton) setLoading(true);
+    async ({ isCurrent }) => {
       try {
-        await loadTeams(sid);
-        await Promise.all([loadStandings(sid), loadMatches(sid)]);
+        const teams = await loadTeams(sportId);
+        if (!isCurrent()) return; // resposta de requisição superada
+        const [stand, rows] = await Promise.all([loadStandings(sportId), loadMatches(sportId, teams)]);
+        if (!isCurrent()) return;
+        if (teams) {
+          teamsRef.current = teams; // mantém o ref sincronizado
+          setTeamsById(teams);
+        }
+        if (stand) setStandings(stand);
+        if (rows) setMatches(rows);
       } finally {
-        setLoading(false);
+        if (isCurrent()) setLoading(false);
       }
     },
-    [loadTeams, loadStandings, loadMatches]
+    [sportId, loadTeams, loadStandings, loadMatches]
   );
 
   useEffect(() => { loadSportId(); }, [loadSportId]);
 
-  useEffect(() => {
-    if (!sportId) {
-      setLoading(false);
-      return;
-    }
-    loadAll(sportId, { skeleton: true });
-  
-    if (channelRef.current) {
-      try { supabase.removeChannel(channelRef.current); } catch {}
-      channelRef.current = null;
-    }
-    const onChange = () => {
-      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
-      refreshTimerRef.current = setTimeout(() => loadAll(sportId, { skeleton: false }), 1000);
-    };
-    const ch = supabase
-      .channel(`volei-hub-${sportId}`)
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "matches", filter: `sport_id=eq.${sportId}` }, onChange)
-      .on("postgres_changes", { event: "UPDATE", schema: "public", table: "matches", filter: `sport_id=eq.${sportId}` }, onChange)
-      .on("postgres_changes", { event: "DELETE", schema: "public", table: "matches", filter: `sport_id=eq.${sportId}` }, onChange)
-      .subscribe();
-    channelRef.current = ch;
-  
-    return () => {
-      if (refreshTimerRef.current) { clearTimeout(refreshTimerRef.current); refreshTimerRef.current = null; }
-      if (channelRef.current) { try { supabase.removeChannel(channelRef.current); } catch {} channelRef.current = null; }
-    };
-  }, [sportId, loadAll]);  
+  useLiveRefetch({
+    channelKey: `volei-hub-${sportId}`,
+    enabled: !!sportId,
+    refetch: loadAll,
+    debounceMs: 1000,
+    subscriptions: [{ table: "matches", filter: `sport_id=eq.${sportId}` }],
+  });
 
   useEffect(() => {
     if (!loading) {
